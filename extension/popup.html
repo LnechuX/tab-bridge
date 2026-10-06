@@ -4,53 +4,70 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Полученные вкладки — Tab Bridge</title>
+  <title>Tab Bridge</title>
   <link rel="stylesheet" href="common.css">
   <style>
-    body { max-width: 560px; margin: 0 auto; padding: 24px 16px; }
-    header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    body { width: 360px; max-width: 100%; padding: 14px; }
+    body.full { width: auto; max-width: 620px; margin: 0 auto; padding: 24px 16px; }
+    header { display: flex; align-items: center; gap: 8px; }
     header img { width: 22px; height: 22px; }
     header .name { font-weight: 600; flex: 1; }
-    .lock { font-size: 12px; color: var(--ok); margin: 0 0 10px; }
-    #status { min-height: 18px; margin: 8px 0 4px; font-size: 13px; overflow-wrap: anywhere; }
-    .head { display: flex; align-items: baseline; justify-content: space-between; margin: 14px 0 6px; }
-    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; }
-    .link { background: none; border: 0; padding: 0; color: var(--muted); font-size: 12px; text-decoration: underline; }
+    .lock { font-size: 11px; color: var(--ok); margin: 2px 0 12px 30px; }
+    .page { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
+    .page .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .page .h { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #targets { display: grid; gap: 8px; }
+    #targets button { width: 100%; padding: 12px; font-size: 15px; text-align: left; display: flex; align-items: center; gap: 10px; }
+    #targets button .ic { font-size: 18px; }
+    #targets button .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #targets .all { justify-content: center; font-size: 14px; padding: 9px; }
+    #targets button:not(.primary) .nm { font-weight: 500; }
+    .empty-box { text-align: center; padding: 6px 0 2px; }
+    .empty-box p { margin: 0 0 10px; }
+    #status { min-height: 18px; margin: 8px 0 2px; font-size: 13px; overflow-wrap: anywhere; }
+    .tabs { display: flex; gap: 4px; margin: 12px 0 6px; border-bottom: 1px solid var(--line); }
+    .tabs button { border: 0; background: none; border-radius: 0; padding: 6px 8px; color: var(--muted); font-size: 13px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
     ul { list-style: none; margin: 0; padding: 0; }
-    li a {
-      display: block; text-decoration: none; color: var(--text);
-      padding: 7px 9px; border-radius: 8px; border: 1px solid transparent;
-    }
-    li a:hover { background: var(--card); border-color: var(--line); }
+    li { padding: 7px 4px; border-bottom: 1px solid var(--line); }
+    li:last-child { border-bottom: 0; }
     li .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .row { display: flex; gap: 8px; margin-top: 10px; }
-    .row button { flex: 1; }
-    #empty { padding: 6px 2px; }
+    li .m { display: block; font-size: 12px; color: var(--muted); }
+    li a { color: var(--text); text-decoration: none; }
+    li a:hover .t { text-decoration: underline; }
+    .st-opened { color: var(--ok); }
+    .st-delivered { color: var(--accent); }
+    .none { padding: 8px 4px; }
+    footer { display: flex; justify-content: space-between; margin-top: 10px; gap: 8px; }
+    footer button { flex: 1; font-size: 13px; padding: 7px 8px; }
   </style>
 </head>
 <body>
   <header>
     <img src="icons/icon48.png" alt="">
     <span class="name">Tab Bridge</span>
-    <span class="muted" id="device"></span>
+    <span class="muted" id="me"></span>
   </header>
-  <div class="lock">🔒 Сквозное шифрование включено</div>
+  <div class="lock">🔒 Сквозное шифрование</div>
 
-  <div class="muted">Чтобы отправить страницу на телефон — просто нажмите на значок Tab Bridge справа от адресной строки.</div>
-  <div id="status"></div>
+  <div id="sendBox">
+    <div class="page" id="page" hidden><div class="t" id="pageTitle"></div><div class="h" id="pageHost"></div></div>
+    <div id="targets"></div>
+    <div id="status" role="status"></div>
+  </div>
 
-  <div class="head">
-    <h2>Полученные вкладки</h2>
-    <button class="link" id="clear" hidden>Очистить</button>
+  <div class="tabs">
+    <button id="tabSent" class="on">Отправлено</button>
+    <button id="tabRecv">Получено</button>
   </div>
   <ul id="list"></ul>
-  <div id="empty" class="muted">Пока ничего не приходило.</div>
+  <div id="none" class="muted none" hidden></div>
 
-  <div class="row">
-    <button id="check">Проверить</button>
-    <button id="settings">Настройки</button>
-  </div>
-  <div class="muted" id="last" style="margin-top:8px"></div>
+  <footer>
+    <button id="full">Вся история</button>
+    <button id="settings">Устройства и настройки</button>
+  </footer>
+  <div class="muted" id="last" style="margin-top:8px;font-size:11px"></div>
 
   <script src="popup.js"></script>
 </body>

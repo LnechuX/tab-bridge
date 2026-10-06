@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Bridge — вкладки между устройствами",
   "short_name": "Tab Bridge",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "Отправляйте вкладку с ПК на телефон и обратно. Сквозное шифрование: сервер не видит ваши ссылки.",
   "permissions": [
     "storage",
@@ -25,16 +25,18 @@
     "scripts": [
       "config.js",
       "tb-crypto.js",
+      "tb-core.js",
       "background.js"
     ]
   },
   "action": {
-    "default_title": "Отправить эту вкладку на телефон (правый клик — полученные вкладки)",
+    "default_title": "Tab Bridge — отправить вкладку",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png"
-    }
+    },
+    "default_popup": "popup.html"
   },
   "options_ui": {
     "page": "options.html",

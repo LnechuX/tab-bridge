@@ -2,22 +2,68 @@ const api = globalThis.browser ?? globalThis.chrome;
 const C = globalThis.TBCrypto;
 const CFG = globalThis.TB_CONFIG || {};
 const $ = (id) => document.getElementById(id);
-const KEYS = ["deviceName", "secret", "server", "phoneUrl", "autoOpen", "focusOpened", "notify"];
 const NTFY = "https://ntfy.sh"; // сервер по умолчанию на странице для телефона
 
 const cleanUrl = (u) => String(u || "").trim().replace(/\/+$/, "");
 const DEFAULT_SERVER = cleanUrl(CFG.server) || NTFY;
 const DEFAULT_PHONE = cleanUrl(CFG.phoneUrl);
 
-function say(el, text, cls = "muted") {
-  el.textContent = text;
-  el.className = cls;
+function say(el, text, cls = "muted") { el.textContent = text; el.className = cls; }
+
+async function call(msg) {
+  try { return (await api.runtime.sendMessage(msg)) ?? { ok: false, error: "Нет ответа от фона" }; }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
 }
 
+const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : "🔹");
+function ago(sec) {
+  if (!sec) return "";
+  const d = Math.max(0, Math.floor(Date.now() / 1000 - sec));
+  if (d < 120) return "был в сети только что";
+  if (d < 3600) return `был в сети ${Math.floor(d / 60)} мин назад`;
+  if (d < 86400) return `был в сети ${Math.floor(d / 3600)} ч назад`;
+  return "был в сети " + new Date(sec * 1000).toLocaleDateString();
+}
+
+// ---------- устройства ----------
+async function renderDevices() {
+  const r = await call({ type: "info" });
+  if (!r.ok) return;
+  const box = $("devices");
+  box.textContent = "";
+  const row = (d, isMe) => {
+    const div = document.createElement("div");
+    div.className = "dev";
+    const ic = document.createElement("span"); ic.className = "ic"; ic.textContent = icon(d.kind);
+    const g = document.createElement("div"); g.className = "grow";
+    const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = d.name;
+    if (isMe) { const y = document.createElement("span"); y.className = "you"; y.textContent = "этот компьютер"; nm.append(y); }
+    const m = document.createElement("div"); m.className = "muted"; m.textContent = isMe ? "" : ago(d.lastSeen);
+    g.append(nm, m);
+    div.append(ic, g);
+    if (!isMe) {
+      const b = document.createElement("button");
+      b.textContent = "Удалить";
+      b.addEventListener("click", async () => {
+        if (!confirm(`Удалить «${d.name}»? На это устройство больше нельзя будет отправлять, а оно само отключится, как только выйдет в сеть.\n\nЕсли устройство потеряно — лучше дополнительно «Сменить ключ».`)) return;
+        b.disabled = true;
+        const res = await call({ type: "remove-device", id: d.id });
+        if (!res.ok) { b.disabled = false; alert(res.error); }
+        renderDevices();
+      });
+      div.append(b);
+    }
+    box.append(div);
+  };
+  row({ ...r.me, kind: "pc" }, true);
+  r.devices.forEach((d) => row(d, false));
+  $("noDevices").hidden = r.devices.length > 0;
+}
+
+// ---------- этот компьютер ----------
 async function load() {
-  // при первом запуске фон может ещё создавать ключ — подождём
   for (let i = 0; i < 30; i++) {
-    const s = await api.storage.local.get(KEYS);
+    const s = await api.storage.local.get(["deviceName", "secret", "server", "phoneUrl", "autoOpen", "focusOpened", "notify"]);
     if (s.secret || i === 29) {
       $("deviceName").value = s.deviceName || "";
       $("secret").value = C.formatSecret(s.secret || "");
@@ -27,47 +73,36 @@ async function load() {
       $("autoOpen").checked = s.autoOpen ?? false;
       $("focusOpened").checked = s.focusOpened ?? false;
       $("notify").checked = s.notify ?? true;
+      $("noPhone").hidden = Boolean(cleanUrl(s.phoneUrl) || DEFAULT_PHONE);
       return;
     }
     await new Promise((r) => setTimeout(r, 150));
   }
 }
 
-// ---------- основные настройки: сохраняются сразу ----------
 let nameTimer = null;
-function saveBasic(patch) {
-  api.storage.local.set(patch).then(() => say($("basicMsg"), "Сохранено ✓", "ok"));
-}
 $("deviceName").addEventListener("input", () => {
   clearTimeout(nameTimer);
-  nameTimer = setTimeout(() => saveBasic({ deviceName: $("deviceName").value.trim().slice(0, 40) || "Без названия" }), 500);
+  nameTimer = setTimeout(async () => {
+    await call({ type: "rename", name: $("deviceName").value });
+    say($("basicMsg"), "Сохранено ✓ — новое имя увидят ваши устройства", "ok");
+  }, 700);
 });
 for (const id of ["autoOpen", "focusOpened", "notify"]) {
-  $(id).addEventListener("change", () => saveBasic({ [id]: $(id).checked }));
+  $(id).addEventListener("change", () => api.storage.local.set({ [id]: $(id).checked }).then(() => say($("basicMsg"), "Сохранено ✓", "ok")));
 }
 $("clearHistory").addEventListener("click", async () => {
-  try { await api.runtime.sendMessage({ type: "clear-history" }); } catch {}
+  await call({ type: "clear-history" });
   say($("basicMsg"), "История очищена ✓", "ok");
 });
 
-// ---------- QR-код для телефона ----------
-function hideQr() {
-  $("qrBox").hidden = true;
-  $("qr").textContent = "";
-  $("qrBtn").textContent = "Показать QR-код";
-}
-
+// ---------- QR-код ----------
 async function renderQr() {
   const s = await api.storage.local.get(["secret", "server", "phoneUrl"]);
   const page = cleanUrl(s.phoneUrl) || DEFAULT_PHONE;
-  if (!/^https:\/\//i.test(page)) {
-    $("noPhone").hidden = false;
-    $("advanced").open = true;
-    return false;
-  }
-  $("noPhone").hidden = true;
+  if (!/^https:\/\//i.test(page)) { $("noPhone").hidden = false; $("advanced").open = true; return false; }
   const server = cleanUrl(s.server) || DEFAULT_SERVER;
-  // ключ кладём во фрагмент (#...) — браузер не отправляет его на сервер, где лежит страница
+  // ключ — во фрагменте (#...): браузер не отправляет его на сервер, где лежит страница
   const text = `${page}/#k=${C.normalizeSecret(s.secret)}` + (server !== NTFY ? `&s=${encodeURIComponent(server)}` : "");
   const qr = qrcode(0, "M");
   qr.addData(text);
@@ -77,9 +112,13 @@ async function renderQr() {
 }
 
 $("qrBtn").addEventListener("click", async () => {
-  if (!$("qrBox").hidden) return hideQr();
+  if (!$("qr").hidden) {
+    $("qr").hidden = true; $("qrWarn").hidden = true; $("qr").textContent = "";
+    $("qrBtn").textContent = "Показать QR-код";
+    return;
+  }
   if (await renderQr()) {
-    $("qrBox").hidden = false;
+    $("qr").hidden = false; $("qrWarn").hidden = false;
     $("qrBtn").textContent = "Скрыть QR-код";
   }
 });
@@ -91,56 +130,61 @@ $("show").addEventListener("click", () => {
   $("show").textContent = hidden ? "Скрыть" : "Показать";
 });
 
-$("gen").addEventListener("click", () => {
-  if (!confirm("Создать новый ключ? Телефон и другие компьютеры придётся подключить заново.")) return;
-  $("secret").value = C.formatSecret(C.generateSecret());
-  hideQr();
-  say($("msg"), "Новый ключ создан. Нажмите «Сохранить».");
-});
-
 $("copy").addEventListener("click", async () => {
   try {
-    await navigator.clipboard.writeText(C.formatSecret($("secret").value));
+    await navigator.clipboard.writeText($("secret").value);
     say($("msg"), "Скопировано. Очистите буфер обмена после вставки.", "ok");
   } catch {
-    $("secret").type = "text";
-    $("secret").select();
+    $("secret").type = "text"; $("secret").select();
     say($("msg"), "Выделил ключ — скопируйте вручную.");
   }
 });
 
+async function setKey(secret, okText) {
+  const server = cleanUrl($("server").value) || DEFAULT_SERVER;
+  const r = await call({ type: "set-key", secret, server });
+  if (!r.ok) return say($("msg"), r.error, "err");
+  await load();
+  await renderDevices();
+  if (!$("qr").hidden) await renderQr();
+  say($("msg"), okText, "ok");
+}
+
+$("newKey").addEventListener("click", () => {
+  if (!confirm("Сменить ключ? Все устройства будут отключены, их нужно будет подключить заново по QR-коду.")) return;
+  setKey(C.generateSecret(), "Ключ сменён ✓ Подключите устройства заново.");
+});
+
+$("join").addEventListener("click", () => {
+  const k = C.normalizeSecret($("joinKey").value);
+  const bad = C.checkSecret(k);
+  if (bad) return say($("msg"), bad, "err");
+  if (!confirm("Подключить этот компьютер к группе с этим ключом? Текущий список устройств будет заменён.")) return;
+  $("joinKey").value = "";
+  setKey(k, "Подключено ✓ Устройства группы появятся в списке через несколько секунд.");
+});
+
 $("save").addEventListener("click", async () => {
-  const secret = C.normalizeSecret($("secret").value);
   const server = cleanUrl($("server").value) || DEFAULT_SERVER;
   const phoneUrl = cleanUrl($("phoneUrl").value);
-
-  const bad = C.checkSecret(secret);
-  if (bad) return say($("msg"), bad, "err");
   if (!/^https:\/\/[^/\s]+/i.test(server)) return say($("msg"), "Сервер должен быть на https://", "err");
   if (phoneUrl && !/^https:\/\/[^/\s]+/i.test(phoneUrl)) return say($("msg"), "Адрес страницы должен начинаться с https://", "err");
-
   if (server !== NTFY && api.permissions?.request) {
     try {
       const granted = await api.permissions.request({ origins: [new URL(server).origin + "/*"] });
       if (!granted) return say($("msg"), "Без разрешения расширение не сможет связаться с этим сервером.", "err");
     } catch {}
   }
-
-  const old = await api.storage.local.get(["secret", "server"]);
-  const patch = { secret, server, phoneUrl };
-  if (C.normalizeSecret(old.secret) !== secret || (cleanUrl(old.server) || DEFAULT_SERVER) !== server) {
-    const now = Math.floor(Date.now() / 1000);
-    Object.assign(patch, { since: String(now), startTs: now, seen: [], nonces: [], history: [] });
+  const old = await api.storage.local.get(["server", "secret"]);
+  await api.storage.local.set({ phoneUrl });
+  if ((cleanUrl(old.server) || DEFAULT_SERVER) !== server) {
+    await setKey(old.secret, "Сервер изменён ✓ Подключите устройства заново.");
+  } else {
+    await call({ type: "settings-changed" });
+    say($("msg"), "Сохранено ✓", "ok");
   }
-  await api.storage.local.set(patch);
-  try { await api.runtime.sendMessage({ type: "settings-changed" }); } catch {}
-  $("secret").value = C.formatSecret(secret);
-  if (!$("qrBox").hidden) await renderQr();
-  say($("msg"), "Сохранено ✓", "ok");
-});
-
-$("inbox").addEventListener("click", () => {
-  api.tabs.create({ url: api.runtime.getURL("popup.html?tab=1") });
+  $("noPhone").hidden = Boolean(phoneUrl || DEFAULT_PHONE);
+  if (!$("qr").hidden) await renderQr();
 });
 
 // ---------- запуск ----------
@@ -148,7 +192,5 @@ if (location.hash === "#welcome") {
   $("welcome").hidden = false;
   history.replaceState(null, "", location.pathname);
 }
-load().then(async () => {
-  const s = await api.storage.local.get("phoneUrl");
-  $("noPhone").hidden = Boolean(cleanUrl(s.phoneUrl) || DEFAULT_PHONE);
-});
+load().then(renderDevices);
+api.storage.onChanged.addListener((ch) => { if (ch.devices) renderDevices(); });

@@ -88,7 +88,7 @@
           { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("ntfy-topic") }, ikm, 128
         ));
         const topic = "tb2-" + Array.from(bits, (b) => b.toString(16).padStart(2, "0")).join("");
-        return { topic, key };
+        return { topic, key, ikm };
       })());
     }
     return groupCache.get(n);
@@ -163,6 +163,34 @@
     };
   }
 
+  // Личная тема устройства (например "inbox:<id>"). По ней нельзя восстановить ни ключ, ни id.
+  const topicCache = new Map();
+  function topicFor(group, label) {
+    const k = group.topic + "|" + label;
+    if (!topicCache.has(k)) {
+      topicCache.set(k, (async () => {
+        const bits = new Uint8Array(await subtle.deriveBits(
+          { name: "HKDF", hash: "SHA-256", salt: enc.encode(SALT), info: enc.encode("topic:" + label) }, group.ikm, 128
+        ));
+        return "tb2-" + Array.from(bits, (b) => b.toString(16).padStart(2, "0")).join("");
+      })());
+    }
+    return topicCache.get(k);
+  }
+
+  // Универсальные сообщения протокола (ссылка, «привет», «удалить», «доставлено»).
+  async function seal(group, obj) {
+    const o = Object.assign({}, obj, { v: 2, ts: Math.floor(Date.now() / 1000) });
+    if (typeof o.t === "string" && enc.encode(JSON.stringify(o)).length > MAX_BODY) o.t = "";
+    return encrypt(group, o);
+  }
+
+  async function open(group, text) {
+    const r = await decrypt(group, text);
+    if (!r || !r.obj || typeof r.obj !== "object" || r.obj.v !== 2 || typeof r.obj.ts !== "number") return null;
+    return r;
+  }
+
   // Найти ссылку в произвольном тексте (для «Поделиться» на телефоне).
   function extractUrl(text) {
     const m = String(text || "").match(/https?:\/\/[^\s<>"']+/i);
@@ -172,7 +200,7 @@
 
   g.TBCrypto = Object.freeze({
     generateSecret, normalizeSecret, checkSecret, formatSecret,
-    deriveGroup, sealLink, openLink, isSafeUrl, extractUrl,
+    deriveGroup, sealLink, openLink, isSafeUrl, extractUrl, topicFor, seal, open,
     MAX_CLOCK_SKEW: 600 // сек: допустимое расхождение времени отправителя и сервера
   });
 })(globalThis);

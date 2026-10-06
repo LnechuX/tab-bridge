@@ -99,3 +99,41 @@ li .m { display: block; color: var(--muted); font-size: 13px; }
 .push button { width: 100%; }
 .pushok { font-size: 13px; color: var(--ok); margin: -4px 0 12px 4px; }
 .push .msg:empty { display: none; }
+button.big { width: 100%; padding: 14px; font-size: 17px; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.steps { padding-left: 22px; margin: 8px 0 0; }
+.steps li { margin: 8px 0; }
+.sym { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; font-size: 13px; }
+.urlrow { display: flex; gap: 8px; }
+.urlrow input { flex: 1; min-width: 0; }
+.urlrow button { flex: none; }
+.targets { display: grid; gap: 8px; margin-top: 10px; }
+.targets button { width: 100%; text-align: left; display: flex; align-items: center; gap: 10px; }
+.targets button .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.targets button.all { justify-content: center; }
+.tabs { display: flex; gap: 4px; margin: -4px 0 6px; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; background: none; border-radius: 0; padding: 8px 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 15px; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+li .t { display: block; }
+.st-delivered { color: var(--accent); }
+.st-opened { color: var(--ok); }
+li.sent { padding: 10px 2px; border-bottom: 1px solid var(--line); }
+li.sent:last-child { border-bottom: 0; }
+.dev { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.dev:last-child { border-bottom: 0; }
+.dev .ic { font-size: 22px; }
+.dev .grow { flex: 1; min-width: 0; }
+.dev .nm { font-weight: 600; }
+.dev button { padding: 7px 10px; font-size: 14px; }
+.you { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 6px; }
+#scanner { position: fixed; inset: 0; background: #000; z-index: 10; display: flex; flex-direction: column; }
+#scanner video { flex: 1; width: 100%; object-fit: cover; }
+#scanner .frame { position: absolute; left: 50%; top: 42%; width: 64vmin; height: 64vmin; transform: translate(-50%, -50%); border: 3px solid rgba(255,255,255,.9); border-radius: 18px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); pointer-events: none; }
+#scanner .scanbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 16px max(18px, env(safe-area-inset-bottom)); color: #fff; text-align: center; background: linear-gradient(transparent, rgba(0,0,0,.8)); }
+#scanner .scanbar div { margin-bottom: 12px; }
+#scanner .scanbar button { background: rgba(255,255,255,.15); color: #fff; border-color: rgba(255,255,255,.3); width: 100%; }
+.mt { margin-top: 12px; }
+.mt6 { margin-top: 6px; }
+.wide { width: 100%; }
+.targets { grid-template-columns: minmax(0, 1fr); }
+.targets button .nm { min-width: 0; }

@@ -67,3 +67,4 @@ code {
   padding: 1px 5px;
   word-break: break-all;
 }
+[hidden] { display: none !important; }

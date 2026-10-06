@@ -3,9 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https: wss:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:; connect-src https: wss:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Tab Bridge">
   <title>Tab Bridge</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
@@ -18,32 +20,42 @@
     <img src="icons/icon-192.png" alt="" width="28" height="28">
     <div>
       <div class="title">Tab Bridge</div>
-      <div class="lock">🔒 Сквозное шифрование</div>
+      <div class="lock" id="meLine">🔒 Сквозное шифрование</div>
     </div>
     <button id="openSettings" class="ghost" hidden>Настройки</button>
   </header>
 
-  <!-- Подключение / настройки -->
+  <!-- iPhone в Safari: сначала на экран «Домой» -->
+  <section id="install" hidden>
+    <div class="card">
+      <h2>Установите Tab Bridge на экран «Домой»</h2>
+      <p class="muted">На iPhone уведомления работают только у приложений с экрана «Домой», и у них отдельная от Safari память. Поэтому подключаемся уже в приложении:</p>
+      <ol class="steps">
+        <li>Нажмите <b>«Поделиться»</b> <span class="sym">⎙</span> внизу экрана.</li>
+        <li>Выберите <b>«На экран „Домой“»</b> → «Добавить».</li>
+        <li>Откройте <b>Tab Bridge</b> с экрана «Домой» и нажмите <b>«Сканировать QR-код»</b> — наведите на код на компьютере.</li>
+      </ol>
+      <button id="pairHere" class="link mt">Подключить прямо здесь, в Safari (без уведомлений)</button>
+    </div>
+  </section>
+
+  <!-- Подключение -->
   <section id="setup" hidden>
     <div class="card">
-      <h2 id="setupTitle">Подключение</h2>
-      <p class="muted" id="setupHint">Вставьте ключ из настроек расширения или отсканируйте QR-код камерой.</p>
-      <label for="secret">Секретный ключ</label>
-      <input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <label class="check"><input id="showSecret" type="checkbox"> Показать ключ</label>
-      <label for="deviceName">Название этого устройства</label>
+      <h2>Подключение</h2>
+      <p class="muted" id="setupHint">Откройте на компьютере настройки Tab Bridge, нажмите «Показать QR-код» и отсканируйте его.</p>
+      <button id="scan" class="primary big">📷 Сканировать QR-код</button>
+      <label for="deviceName">Название этого телефона</label>
       <input id="deviceName" type="text" maxlength="40">
-      <details>
-        <summary>Свой сервер</summary>
-        <label for="server">Сервер ntfy (https)</label>
+      <details id="manual">
+        <summary>Ввести ключ вручную</summary>
+        <label for="secret">Ключ (с компьютера: Настройки → Дополнительно)</label>
+        <input id="secret" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" class="mono">
+        <label for="server">Сервер ntfy</label>
         <input id="server" type="url" spellcheck="false">
+        <button id="saveSetup" class="primary mt wide">Подключить</button>
       </details>
-      <div class="row">
-        <button id="saveSetup" class="primary">Подключить</button>
-        <button id="cancelSetup" hidden>Отмена</button>
-      </div>
       <div id="setupMsg" class="msg" role="status"></div>
-      <button id="forget" class="danger" hidden>Забыть ключ и удалить все данные на этом устройстве</button>
     </div>
   </section>
 
@@ -55,31 +67,67 @@
       <button id="pushBtn" class="primary" hidden>Включить уведомления</button>
       <div id="pushMsg" class="msg" role="status"></div>
     </div>
-    <div class="pushok" id="pushOk" hidden>🔔 Уведомления включены — вкладки с компьютера придут сами</div>
 
     <div class="card">
-      <h2>Отправить на компьютер</h2>
-      <input id="url" type="url" inputmode="url" placeholder="Ссылка https://…" autocomplete="off">
-      <div class="row">
+      <h2>Отправить</h2>
+      <div class="urlrow">
+        <input id="url" type="url" inputmode="url" placeholder="Ссылка https://…" autocomplete="off">
         <button id="paste">Вставить</button>
-        <button id="send" class="primary">Отправить</button>
       </div>
+      <div id="targets" class="targets"></div>
       <div id="sendMsg" class="msg" role="status"></div>
     </div>
 
     <div class="card">
-      <div class="head">
-        <h2>Пришло с других устройств</h2>
-        <button id="clear" class="link" hidden>Очистить</button>
+      <div class="tabs">
+        <button id="tabRecv" class="on">Получено</button>
+        <button id="tabSent">Отправлено</button>
       </div>
       <ul id="list"></ul>
-      <div id="empty" class="muted">Пока ничего не приходило. Нажмите на значок Tab Bridge в браузере компьютера — вкладка появится здесь.</div>
-      <div id="state" class="muted small"></div>
+      <div id="empty" class="muted"></div>
+      <div class="head mt6">
+        <div id="state" class="muted small"></div>
+        <button id="clear" class="link" hidden>Очистить</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Мои устройства</h2>
+      <div id="devices"></div>
+    </div>
+  </section>
+
+  <!-- Настройки -->
+  <section id="settings" hidden>
+    <div class="card">
+      <h2>Настройки</h2>
+      <label for="myName">Название этого телефона</label>
+      <input id="myName" type="text" maxlength="40">
+      <div class="row">
+        <button id="saveName" class="primary">Сохранить</button>
+        <button id="closeSettings">Назад</button>
+      </div>
+      <div id="settingsMsg" class="msg" role="status"></div>
+      <button id="forget" class="danger">Отключить этот телефон</button>
+      <p class="muted small">Телефон исчезнет из списка на остальных устройствах, ключ будет удалён с телефона.</p>
     </div>
   </section>
 </main>
+
+<!-- Сканер QR-кода -->
+<div id="scanner" hidden>
+  <video id="video" playsinline muted></video>
+  <div class="frame"></div>
+  <div class="scanbar">
+    <div id="scanMsg">Наведите камеру на QR-код на экране компьютера</div>
+    <button id="scanCancel">Отмена</button>
+  </div>
+</div>
+
 <script src="tb-crypto.js"></script>
+<script src="tb-core.js"></script>
 <script src="shared.js"></script>
+<script src="lib/jsQR.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

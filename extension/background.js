@@ -1,130 +1,61 @@
-// Tab Bridge v2 — фоновый скрипт.
+// Tab Bridge v3 — фоновый скрипт расширения.
 // Chrome/Edge/Яндекс: service worker (MV3). Firefox (ПК и Android): event page.
-// Все ссылки шифруются на устройстве (см. tb-crypto.js). Сервер ntfy видит
-// только шифротекст и случайное имя темы.
+// Логика устройств и сообщений — в tb-core.js (общая с телефоном), шифрование — в tb-crypto.js.
 
-if (typeof importScripts === "function" && !globalThis.TBCrypto) importScripts("config.js", "tb-crypto.js");
+if (typeof importScripts === "function" && !globalThis.TBCore) importScripts("config.js", "tb-crypto.js", "tb-core.js");
 
 const api = globalThis.browser ?? globalThis.chrome;
 const C = globalThis.TBCrypto;
-
+const CFG = globalThis.TB_CONFIG || {};
+const DEFAULT_SERVER = String(CFG.server || "https://ntfy.sh").replace(/\/+$/, "");
 const ALARM = "tb-poll";
-const MAX_SEEN = 400;
-const MAX_HISTORY = 30;
-const FETCH_OPTS = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
 
-const DEFAULTS = {
-  server: (globalThis.TB_CONFIG && globalThis.TB_CONFIG.server) || "https://ntfy.sh",
-  secret: "",
-  deviceId: "",
-  deviceName: "",
-  autoOpen: false,    // безопаснее: пришедшие вкладки не открываются сами
-  focusOpened: false,
-  notify: true,
-  phoneUrl: "",       // адрес страницы для телефона (для QR-кода)
-  since: "",
-  startTs: 0,
-  seen: [],           // id сообщений ntfy
-  nonces: [],         // защита от повторной отправки перехваченного сообщения
-  history: [],
-  lastPoll: 0,
-  lastError: ""
+const kv = {
+  getAll: (keys) => api.storage.local.get(keys),
+  setMany: (o) => api.storage.local.set(o)
 };
-
-const nowSec = () => Math.floor(Date.now() / 1000);
-
-function randId(n) {
-  const abc = "abcdefghijkmnpqrstuvwxyz23456789";
-  const bytes = crypto.getRandomValues(new Uint8Array(n));
-  return Array.from(bytes, (b) => abc[b & 31]).join("");
-}
+const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER });
 
 function guessDeviceName() {
   const ua = navigator.userAgent;
-  const os = /Android/i.test(ua) ? "Android"
-    : /iPhone|iPad/i.test(ua) ? "iPhone"
-    : /Windows/i.test(ua) ? "Windows"
-    : /Mac OS/i.test(ua) ? "Mac"
-    : /Linux|CrOS/i.test(ua) ? "Linux" : "Устройство";
-  const br = /YaBrowser/i.test(ua) ? "Яндекс"
-    : /Edg\//.test(ua) ? "Edge"
-    : /OPR\//.test(ua) ? "Opera"
-    : /Firefox/i.test(ua) ? "Firefox"
-    : /Chrome/i.test(ua) ? "Chrome" : "Браузер";
+  const os = /Android/i.test(ua) ? "Android" : /Windows/i.test(ua) ? "Windows" : /Mac OS/i.test(ua) ? "Mac"
+    : /Linux|CrOS/i.test(ua) ? "Linux" : "ПК";
+  const br = /YaBrowser/i.test(ua) ? "Яндекс" : /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera"
+    : /Firefox/i.test(ua) ? "Firefox" : /Chrome/i.test(ua) ? "Chrome" : "Браузер";
   return `${br} · ${os}`;
 }
 
-const base = (s) => String(s.server || DEFAULTS.server).trim().replace(/\/+$/, "");
-
-let queue = Promise.resolve();
-function serial(fn) {
-  const p = queue.then(fn, fn);
-  queue = p.catch(() => {});
-  return p;
-}
-
-// ---------- настройки ----------
-
+// ---------- первый запуск и переход со старых версий ----------
 let initPromise = null;
 function init() {
   initPromise ??= (async () => {
-    const s = { ...DEFAULTS, ...(await api.storage.local.get(Object.keys(DEFAULTS))) };
-    const patch = {};
-    if (!s.deviceId) patch.deviceId = randId(12);
-    if (!s.deviceName) patch.deviceName = guessDeviceName();
+    const s = await api.storage.local.get(["secret", "deviceId", "deviceName", "server"]);
     if (!s.secret || C.checkSecret(s.secret)) {
-      // первый запуск или переход с версии 1 (без шифрования): начинаем с чистого листа
-      const now = nowSec();
-      Object.assign(patch, { secret: C.generateSecret(), startTs: now, since: String(now), seen: [], nonces: [], history: [] });
-      try { await api.storage.local.remove(["topic"]); } catch {}
+      await core.pair(C.generateSecret(), DEFAULT_SERVER, s.deviceName || guessDeviceName());
+    } else if (!s.deviceId) {
+      // версия 2.x: ключ был, устройства — нет. Сохраняем ключ, телефон переподключать не нужно.
+      await api.storage.local.set({ deviceId: TBCore.randId(12), deviceName: s.deviceName || guessDeviceName() });
     }
-    if (!s.startTs && !patch.startTs) patch.startTs = nowSec();
-    if (!s.since && !patch.since) patch.since = String(patch.startTs || s.startTs);
-    if (Object.keys(patch).length) await api.storage.local.set(patch);
+    await api.storage.local.remove(["topic", "since", "phoneTopic"]).catch(() => {});
   })();
   return initPromise;
 }
 
-async function getSettings() {
-  await init();
-  return { ...DEFAULTS, ...(await api.storage.local.get(Object.keys(DEFAULTS))) };
-}
-
 // ---------- отправка ----------
-
-async function sendLink(url, title) {
-  if (!C.isSafeUrl(url)) throw new Error("Эту страницу передать нельзя — поддерживаются только http/https-ссылки.");
-  const s = await getSettings();
-  const group = await C.deriveGroup(s.secret);
-  const message = await C.sealLink(group, { url, title, from: s.deviceName, device: s.deviceId });
-  const r = await fetch(base(s), {
-    ...FETCH_OPTS,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic: group.topic, message })
-  });
-  if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
-  return { sent: true };
-}
-
-// Право activeTab даёт адрес только активной вкладки и только после вашего действия
-// (клик по кнопке, горячая клавиша, пункт меню). Доступа ко всем вкладкам нет.
 async function getActiveTab() {
   const ok = (t) => C.isSafeUrl(t?.url || "");
   let tabs = await api.tabs.query({ active: true, lastFocusedWindow: true });
   let t = tabs.find(ok);
-  if (!t) {
-    tabs = await api.tabs.query({ active: true });
-    t = tabs.find(ok);
-  }
+  if (!t) { tabs = await api.tabs.query({ active: true }); t = tabs.find(ok); }
   return t;
 }
 
-async function sendActiveTab(tab) {
+async function sendActive(toIds, tab) {
+  await init();
   const t = tab && C.isSafeUrl(tab.url || "") ? tab : await getActiveTab();
-  if (!t) throw new Error("Не нашёл открытую веб-страницу для отправки.");
-  await sendLink(t.url, t.title);
-  return { sent: true, title: t.title || t.url };
+  if (!t) throw new Error("Эту страницу отправить нельзя — откройте обычный сайт (http/https).");
+  const entry = await core.sendLink(t.url, t.title, toIds);
+  return { entry };
 }
 
 function flashBadge(ok) {
@@ -135,213 +66,209 @@ function flashBadge(ok) {
   } catch {}
 }
 
-// ---------- получение ----------
+function notifyError(e) {
+  try {
+    api.notifications?.create("tb-err", {
+      type: "basic", iconUrl: api.runtime.getURL("icons/icon128.png"),
+      title: "Не удалось отправить", message: String(e?.message || e)
+    });
+  } catch {}
+}
 
+let sending = false;
+function sendWithFeedback(job) {
+  if (sending) return;
+  sending = true;
+  Promise.resolve().then(job)
+    .then(() => flashBadge(true), (e) => { flashBadge(false); notifyError(e); })
+    .finally(() => { sending = false; });
+}
+
+// ---------- приём ----------
 async function openTab(url, active) {
   if (!C.isSafeUrl(url)) return null;
   const t = await api.tabs.create({ url, active });
-  if (active && api.windows && t?.windowId != null) {
-    try { await api.windows.update(t.windowId, { focused: true }); } catch {}
-  }
+  if (active && api.windows && t?.windowId != null) { try { await api.windows.update(t.windowId, { focused: true }); } catch {} }
   return t;
 }
 
-// Вызывать только внутри serial()
-async function processMessages(msgs) {
-  const s = await getSettings();
-  const group = await C.deriveGroup(s.secret);
-  const seen = new Set(s.seen);
-  const nonces = new Set(s.nonces);
-  const fresh = [];
-
-  for (const m of msgs) {
-    if (!m || m.event !== "message" || !m.id || seen.has(m.id)) continue;
-    seen.add(m.id);
-    if (typeof m.time !== "number" || m.time < s.startTs) continue;
-    const link = await C.openLink(group, m.message);
-    if (!link) continue;                                        // не расшифровалось — чужое или подделка
-    if (nonces.has(link.nonce)) continue;                       // повтор старого сообщения
-    nonces.add(link.nonce);
-    if (Math.abs(link.ts - m.time) > C.MAX_CLOCK_SKEW) continue; // устаревшее/переотправленное
-    if (link.device === s.deviceId) continue;                   // это мы сами отправили
-    fresh.push({ id: m.id, url: link.url, title: link.title, from: link.from, time: m.time, tabId: null });
+async function afterHandle(res) {
+  if (!res) return res;
+  if (res.removedMe) {
+    // это устройство удалили с другого устройства — отключаемся и создаём новую группу
+    initPromise = null;
+    await api.storage.local.set({ secret: "" });
+    await init();
+    await setupMenus();
+    reconnect();
+    return res;
   }
-
-  for (const h of fresh) {
+  if (res.devicesChanged) setupMenus();
+  const s = await api.storage.local.get(["autoOpen", "focusOpened", "notify", "tabIds"]);
+  const tabIds = s.tabIds || {};
+  for (const h of res.fresh) {
     if (s.autoOpen) {
-      try { h.tabId = (await openTab(h.url, !!s.focusOpened))?.id ?? null; } catch {}
+      try {
+        const t = await openTab(h.url, !!s.focusOpened);
+        if (t) { tabIds[h.id] = t.id; core.markOpened(h.id); }
+      } catch {}
     }
-    if (s.notify && api.notifications) {
+    if ((s.notify ?? true) && api.notifications) {
       try {
         await api.notifications.create("tb:" + h.id, {
-          type: "basic",
-          iconUrl: api.runtime.getURL("icons/icon128.png"),
+          type: "basic", iconUrl: api.runtime.getURL("icons/icon128.png"),
           title: (h.from ? `Вкладка с «${h.from}»` : "Новая вкладка") + (s.autoOpen ? "" : " — нажмите, чтобы открыть"),
           message: h.title
         });
       } catch {}
     }
   }
-
-  await api.storage.local.set({
-    seen: [...seen].slice(-MAX_SEEN),
-    nonces: [...nonces].slice(-MAX_SEEN),
-    history: [...fresh.reverse(), ...s.history].slice(0, MAX_HISTORY)
-  });
-  return fresh.length;
+  if (res.fresh.length) await api.storage.local.set({ tabIds: Object.fromEntries(Object.entries(tabIds).slice(-50)) });
+  return res;
 }
 
 async function poll() {
-  return serial(async () => {
-    try {
-      const s = await getSettings();
-      const group = await C.deriveGroup(s.secret);
-      const url = `${base(s)}/${group.topic}/json?poll=1&since=${encodeURIComponent(s.since)}`;
-      const r = await fetch(url, FETCH_OPTS);
-      if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
-      const msgs = (await r.text())
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-        .filter(Boolean);
-      const received = await processMessages(msgs);
-      const last = msgs.filter((m) => m.event === "message" && m.id).at(-1);
-      await api.storage.local.set({ ...(last ? { since: last.id } : {}), lastPoll: Date.now(), lastError: "" });
-      return { received };
-    } catch (e) {
-      const text = e instanceof TypeError ? "нет соединения с сервером (проверьте интернет)" : String(e?.message || e);
-      await api.storage.local.set({ lastError: text, lastPoll: Date.now() });
-      throw e;
-    }
-  });
+  await init();
+  try {
+    const res = await afterHandle(await core.poll());
+    await api.storage.local.set({ lastPoll: Date.now(), lastError: "" });
+    return res;
+  } catch (e) {
+    const text = e instanceof TypeError ? "нет соединения с сервером (проверьте интернет)" : String(e?.message || e);
+    await api.storage.local.set({ lastError: text, lastPoll: Date.now() });
+    throw e;
+  }
 }
 
 let ws = null;
 let wsKey = "";
 async function connectLive() {
-  const s = await getSettings();
-  const group = await C.deriveGroup(s.secret);
-  const key = base(s) + "|" + group.topic;
-  if (ws && wsKey === key && ws.readyState <= 1) return;
+  await init();
+  const url = await core.wsUrl();
+  if (!url) return;
+  if (ws && wsKey === url && ws.readyState <= 1) return;
   try { ws?.close(); } catch {}
   ws = null;
   try {
-    const sock = new WebSocket(`${base(s).replace(/^http/i, "ws")}/${group.topic}/ws`);
+    const sock = new WebSocket(url);
     ws = sock;
-    wsKey = key;
+    wsKey = url;
     sock.onmessage = (e) => {
       let m;
       try { m = JSON.parse(e.data); } catch { return; }
-      if (m.event === "message") serial(() => processMessages([m])).catch(() => {});
+      if (m.event === "message") core.handle([m]).then(afterHandle).catch(() => {});
     };
     sock.onclose = sock.onerror = () => { if (ws === sock) ws = null; };
-  } catch {
-    ws = null;
-  }
+  } catch { ws = null; }
 }
 
-async function ensureAlarm() {
-  const a = await api.alarms.get(ALARM);
-  if (!a) await api.alarms.create(ALARM, { periodInMinutes: 0.5 });
+function reconnect() {
+  try { ws?.close(); } catch {}
+  ws = null;
+  wake();
 }
 
 async function wake() {
-  try { await ensureAlarm(); } catch {}
+  try { if (!(await api.alarms.get(ALARM))) await api.alarms.create(ALARM, { periodInMinutes: 0.5 }); } catch {}
+  try { await init(); } catch {}
   connectLive().catch(() => {});
   poll().catch(() => {});
+  core.maybeHello().catch(() => {});
 }
 
-// ---------- меню, горячая клавиша, уведомления ----------
-
+// ---------- меню ----------
 async function setupMenus() {
-  if (!api.contextMenus) return; // нет на Firefox для Android
+  if (!api.contextMenus) return;
   try {
     await api.contextMenus.removeAll();
-    api.contextMenus.create({ id: "tb-page", title: "Отправить вкладку на свои устройства", contexts: ["page"] });
-    api.contextMenus.create({ id: "tb-link", title: "Отправить ссылку на свои устройства", contexts: ["link"] });
-    // правый клик по значку расширения
-    api.contextMenus.create({ id: "tb-inbox", title: "Полученные вкладки", contexts: ["action"] });
+    const { devices } = await core.info();
+    for (const [ctx, what] of [["page", "вкладку"], ["link", "ссылку"]]) {
+      if (!devices.length) {
+        api.contextMenus.create({ id: `tb-${ctx}|none`, title: `Отправить ${what} — сначала подключите телефон`, contexts: [ctx] });
+      } else if (devices.length === 1) {
+        api.contextMenus.create({ id: `tb-${ctx}|${devices[0].id}`, title: `Отправить ${what} на «${devices[0].name}»`, contexts: [ctx] });
+      } else {
+        const parent = `tb-${ctx}|parent`;
+        api.contextMenus.create({ id: parent, title: `Отправить ${what} на…`, contexts: [ctx] });
+        for (const d of devices) api.contextMenus.create({ id: `tb-${ctx}|${d.id}`, parentId: parent, title: d.name, contexts: [ctx] });
+        api.contextMenus.create({ id: `tb-${ctx}|all`, parentId: parent, title: "Все устройства", contexts: [ctx] });
+      }
+    }
   } catch {}
 }
-
-function notifyError(e) {
-  try {
-    api.notifications?.create("tb-err", {
-      type: "basic",
-      iconUrl: api.runtime.getURL("icons/icon128.png"),
-      title: "Не удалось отправить вкладку",
-      message: String(e?.message || e)
-    });
-  } catch {}
-}
-
-// Один клик — одна отправка: повторные клики, пока идёт отправка, игнорируются.
-let sending = false;
-function sendWithFeedback(job) {
-  if (sending) return;
-  sending = true;
-  try { api.action.setBadgeBackgroundColor?.({ color: "#2563eb" }); api.action.setBadgeText({ text: "…" }); } catch {}
-  Promise.resolve()
-    .then(job)
-    .then(() => flashBadge(true), (e) => { flashBadge(false); notifyError(e); })
-    .finally(() => { sending = false; });
-}
-
-function openInbox() {
-  api.tabs.create({ url: api.runtime.getURL("popup.html?tab=1") }).catch(() => {});
-}
-
-// Главная кнопка: клик по значку сразу отправляет открытую страницу.
-api.action.onClicked.addListener((tab) => {
-  sendWithFeedback(() => sendActiveTab(tab));
-});
 
 api.contextMenus?.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "tb-inbox") return openInbox();
-  if (info.menuItemId === "tb-link") {
-    return sendWithFeedback(() => sendLink(info.linkUrl, info.linkText || info.selectionText || info.linkUrl));
-  }
-  if (info.menuItemId === "tb-page") sendWithFeedback(() => sendActiveTab(tab));
+  const [kind, target] = String(info.menuItemId).split("|");
+  if (target === "none") return api.runtime.openOptionsPage();
+  const to = target === "all" ? [] : [target];
+  if (kind === "tb-link") sendWithFeedback(() => core.sendLink(info.linkUrl, info.linkText || info.selectionText || info.linkUrl, to));
+  else if (kind === "tb-page") sendWithFeedback(() => sendActive(to, tab));
 });
 
+// Alt+Shift+S — на те же устройства, что и в прошлый раз (или на все)
 api.commands?.onCommand.addListener((cmd, tab) => {
-  if (cmd === "send-current-tab") sendWithFeedback(() => sendActiveTab(tab));
+  if (cmd !== "send-current-tab") return;
+  sendWithFeedback(async () => {
+    const i = await core.info();
+    const ids = new Set(i.devices.map((d) => d.id));
+    return sendActive(i.lastTargets.filter((id) => ids.has(id)), tab);
+  });
 });
 
 api.notifications?.onClicked.addListener(async (nid) => {
   if (!nid.startsWith("tb:")) return;
   try { api.notifications.clear(nid); } catch {}
-  const { history = [] } = await api.storage.local.get("history");
-  const h = history.find((x) => "tb:" + x.id === nid);
+  const id = nid.slice(3);
+  const { history } = await core.info();
+  const h = history.find((x) => x.id === id);
   if (!h) return;
-  if (h.tabId != null) {
+  const { tabIds = {} } = await api.storage.local.get("tabIds");
+  if (tabIds[id] != null) {
     try {
-      const t = await api.tabs.update(h.tabId, { active: true });
+      const t = await api.tabs.update(tabIds[id], { active: true });
       if (api.windows && t?.windowId != null) await api.windows.update(t.windowId, { focused: true });
       return;
     } catch {}
   }
-  openTab(h.url, true).catch(() => {});
+  await openTab(h.url, true);
+  core.markOpened(id);
 });
 
-// ---------- связь с popup и настройками ----------
-
+// ---------- связь с окном расширения и настройками ----------
 async function handle(msg, sender) {
-  // принимаем команды только от страниц самого расширения
   if (sender?.id && sender.id !== api.runtime.id) return {};
+  await init();
   switch (msg?.type) {
-    case "send-active": return sendActiveTab();
-    case "check": await connectLive(); return poll();
-    case "open-inbox": openInbox(); return {};
-    case "clear-history":
-      await serial(() => api.storage.local.set({ history: [] }));
+    case "info": {
+      const i = await core.info();
+      const t = await getActiveTab().catch(() => null);
+      const s = await api.storage.local.get(["lastPoll", "lastError"]);
+      delete i.secret;
+      return { ...i, tab: t ? { title: t.title, url: t.url } : null, ...s };
+    }
+    case "send": return sendActive(msg.to || []);
+    case "check": await connectLive(); await poll(); return {};
+    case "open-received": {
+      const { history } = await core.info();
+      const h = history.find((x) => x.id === msg.id);
+      if (h) { await openTab(h.url, true); await core.markOpened(h.id); }
       return {};
-    case "settings-changed":
-      initPromise = null;
-      try { ws?.close(); } catch {}
-      ws = null;
-      await wake();
+    }
+    case "remove-device": await core.removeDevice(msg.id); await setupMenus(); return {};
+    case "rename": await core.rename(msg.name); return {};
+    case "clear-history": await core.clearHistory(); return {};
+    case "set-key": {
+      // новый ключ (свой или вставленный с другого ПК): подключаемся заново
+      const bad = C.checkSecret(msg.secret);
+      if (bad) throw new Error(bad);
+      await core.leave();
+      const { deviceName } = await api.storage.local.get("deviceName");
+      await core.pair(msg.secret, msg.server || DEFAULT_SERVER, deviceName || guessDeviceName());
+      await setupMenus();
+      reconnect();
       return {};
+    }
+    case "settings-changed": reconnect(); return {};
     default: return {};
   }
 }
@@ -354,12 +281,14 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-api.runtime.onInstalled.addListener((details) => {
+api.runtime.onInstalled.addListener(async (details) => {
+  await init().catch(() => {});
   setupMenus();
   wake();
   if (details?.reason === "install") {
-    // сразу показываем, как подключить телефон
     api.tabs.create({ url: api.runtime.getURL("options.html#welcome") }).catch(() => {});
+  } else {
+    core.hello(false).catch(() => {}); // после обновления — сразу напомнить о себе
   }
 });
 api.runtime.onStartup.addListener(() => { setupMenus(); wake(); });
