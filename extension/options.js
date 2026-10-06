@@ -58,6 +58,7 @@ async function renderDevices() {
   row({ ...r.me, kind: "pc" }, true);
   r.devices.forEach((d) => row(d, false));
   $("noDevices").hidden = r.devices.length > 0;
+  renderButtonSettings(r.devices);
 }
 
 // ---------- этот компьютер ----------
@@ -94,6 +95,32 @@ for (const id of ["autoOpen", "focusOpened", "notify"]) {
 $("clearHistory").addEventListener("click", async () => {
   await call({ type: "clear-history" });
   say($("basicMsg"), "История очищена ✓", "ok");
+});
+
+// ---------- кнопка Tab Bridge ----------
+async function renderButtonSettings(devices) {
+  const s = await api.storage.local.get(["clickMode", "quickTarget"]);
+  const mode = s.clickMode === "instant" ? "instant" : "popup";
+  document.querySelectorAll('input[name="clickMode"]').forEach((r) => { r.checked = r.value === mode; });
+  const sel = $("quickTarget");
+  sel.textContent = "";
+  const add = (value, text) => { const o = document.createElement("option"); o.value = value; o.textContent = text; sel.append(o); };
+  add("last", "Туда же, куда в прошлый раз");
+  add("all", "На все устройства");
+  for (const d of devices) add(d.id, `Только на «${d.name}»`);
+  const q = s.quickTarget || "last";
+  sel.value = [...sel.options].some((o) => o.value === q) ? q : "last";
+}
+document.querySelectorAll('input[name="clickMode"]').forEach((r) => r.addEventListener("change", async () => {
+  await api.storage.local.set({ clickMode: r.value });
+  await call({ type: "click-mode" });
+  say($("btnMsg"), r.value === "instant"
+    ? "Сохранено ✓ Теперь клик по значку сразу отправляет вкладку."
+    : "Сохранено ✓ Клик по значку открывает окно с кнопкой «Отправить».", "ok");
+}));
+$("quickTarget").addEventListener("change", async () => {
+  await api.storage.local.set({ quickTarget: $("quickTarget").value });
+  say($("btnMsg"), "Сохранено ✓", "ok");
 });
 
 // ---------- QR-код ----------
@@ -159,7 +186,7 @@ $("join").addEventListener("click", () => {
   const k = C.normalizeSecret($("joinKey").value);
   const bad = C.checkSecret(k);
   if (bad) return say($("msg"), bad, "err");
-  if (!confirm("Подключить этот компьютер к группе с этим ключом? Текущий список устройств будет заменён.")) return;
+  if (!confirm("Подключить этот компьютер к группе с этим ключом? Текущий список устройств и история этого компьютера будут заменены.")) return;
   $("joinKey").value = "";
   setKey(k, "Подключено ✓ Устройства группы появятся в списке через несколько секунд.");
 });
@@ -191,6 +218,8 @@ $("save").addEventListener("click", async () => {
 if (location.hash === "#welcome") {
   $("welcome").hidden = false;
   history.replaceState(null, "", location.pathname);
+} else if (location.hash === "#button") {
+  setTimeout(() => $("button").scrollIntoView({ behavior: "smooth" }), 300);
 }
 load().then(renderDevices);
 api.storage.onChanged.addListener((ch) => { if (ch.devices) renderDevices(); });

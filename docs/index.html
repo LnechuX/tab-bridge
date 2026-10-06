@@ -61,6 +61,15 @@
 
   <!-- Основной экран -->
   <section id="app" hidden>
+    <div class="card open-card" id="openCard" hidden>
+      <div class="muted small">Новая вкладка</div>
+      <div class="open-title" id="openTitle"></div>
+      <div class="row">
+        <button id="openGo" class="primary">Открыть</button>
+        <button id="openClose">Позже</button>
+      </div>
+    </div>
+
     <div class="card push" id="pushCard" hidden>
       <h2>🔔 Уведомления о новых вкладках</h2>
       <p class="muted" id="pushText"></p>
@@ -103,6 +112,12 @@
       <h2>Настройки</h2>
       <label for="myName">Название этого телефона</label>
       <input id="myName" type="text" maxlength="40">
+      <label for="openIn">Открывать присланные ссылки в</label>
+      <div class="urlrow">
+        <select id="openIn"></select>
+        <button id="testOpen">Проверить</button>
+      </div>
+      <p class="muted small" id="openHint"></p>
       <div class="row">
         <button id="saveName" class="primary">Сохранить</button>
         <button id="closeSettings">Назад</button>
@@ -113,6 +128,15 @@
     </div>
   </section>
 </main>
+
+<!-- Меню ссылки «⋯» -->
+<div id="sheet" class="sheet-bg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-title" id="sheetTitle"></div>
+    <div id="sheetActions"></div>
+    <button id="sheetCancel" class="sheet-cancel">Отмена</button>
+  </div>
+</div>
 
 <!-- Сканер QR-кода -->
 <div id="scanner" hidden>

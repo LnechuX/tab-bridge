@@ -25,7 +25,10 @@ function ago(sec) {
   return new Date(sec * 1000).toLocaleDateString();
 }
 
-const STATE = { sent: ["отправлено", ""], delivered: ["доставлено ✓", "st-delivered"], opened: ["открыто ✓✓", "st-opened"] };
+const STATE = {
+  failed: ["не отправлено", "err"], sent: ["отправлено", ""],
+  delivered: ["доставлено ✓", "st-delivered"], opened: ["открыто ✓✓", "st-opened"]
+};
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -109,6 +112,16 @@ function renderList() {
       });
       m.append(document.createTextNode(` · ${ago(it.time)}`));
       li.append(m);
+      if (it.to.some((t) => t.s === "failed")) {
+        const b = el("button", "retry", "Повторить");
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          const r = await call({ type: "resend", id: it.i });
+          status(r.ok ? "✓ Отправлено повторно" : (r.error || "Не получилось"), r.ok ? "ok" : "err");
+          refresh();
+        });
+        li.append(b);
+      }
     } else {
       const a = el("a");
       a.href = it.url;
@@ -131,10 +144,13 @@ async function refresh() {
   renderList();
   if (info.lastError) { $("last").className = "err"; $("last").textContent = "Связь: " + info.lastError; }
   else $("last").textContent = "";
+  $("warn").hidden = !info.lastWarning;
+  $("warnText").textContent = info.lastWarning || "";
+  $("hint").hidden = FULL || info.clickMode === "instant" || !info.devices.length;
 }
 
 $("tabSent").addEventListener("click", () => { view = "sent"; renderList(); });
-$("tabRecv").addEventListener("click", () => { view = "recv"; renderList(); });
+$("tabRecv").addEventListener("click", () => { view = "recv"; renderList(); call({ type: "mark-read" }); });
 $("settings").addEventListener("click", () => { api.runtime.openOptionsPage(); if (!FULL) window.close(); });
 $("full").addEventListener("click", () => { api.tabs.create({ url: api.runtime.getURL("popup.html?tab=1") }); window.close(); });
 
@@ -144,4 +160,15 @@ api.storage.onChanged.addListener((ch) => {
   if (ch.sent || ch.history || ch.devices) { clearTimeout(t); t = setTimeout(refresh, 150); }
 });
 
-refresh().then(() => call({ type: "check" }));
+$("warnClose").addEventListener("click", async () => { await call({ type: "dismiss-warning" }); $("warn").hidden = true; });
+$("hintLink").addEventListener("click", () => { api.tabs.create({ url: api.runtime.getURL("options.html#button") }); window.close(); });
+
+// если есть непрочитанные — сразу показываем «Получено» и снимаем счётчик
+refresh().then(async () => {
+  if (info && info.history.some((h) => !h.opened && !h.read)) {
+    view = "recv";
+    renderList();
+    call({ type: "mark-read" });
+  }
+  call({ type: "check" });
+});

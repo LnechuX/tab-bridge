@@ -105,9 +105,51 @@
   async function wipe(reg, tellOthers) {
     if (tellOthers) { try { await core.leave(); } catch {} }
     if (reg) await unregister(reg);
+    const keep = { openIn: await KV.get("openIn"), deviceName: await KV.get("deviceName") };  // настройки телефона не теряем
     await KV.clear();
+    for (const [k, v] of Object.entries(keep)) if (v !== undefined) await KV.set(k, v);
+  }
+
+  // ---------- где открывать ссылки ----------
+  // На iPhone приложение с экрана «Домой» открывает внешние ссылки во встроенном окне.
+  // Чтобы ссылка открылась в настоящем браузере, используем адреса-«переходники» браузеров:
+  // x-safari-https:// (Safari, iOS 15 и 17+), googlechromes:// (Chrome), yandexbrowser-open-url:// и т.д.
+  const UA = (g.navigator && g.navigator.userAgent) || "";
+  const IS_IOS = /iPhone|iPad|iPod/i.test(UA) || (/Macintosh/i.test(UA) && g.navigator && g.navigator.maxTouchPoints > 1);
+  const IS_ANDROID = /Android/i.test(UA);
+  const OPEN_MODES = IS_IOS
+    ? [["safari", "Safari"], ["chrome", "Chrome"], ["yandex", "Яндекс Браузер"], ["firefox", "Firefox"], ["app", "Внутри Tab Bridge"]]
+    : IS_ANDROID
+      ? [["default", "Браузер по умолчанию"], ["chrome", "Chrome"], ["yandex", "Яндекс Браузер"], ["firefox", "Firefox"]]
+      : [["default", "Браузер по умолчанию"]];
+  const defaultOpenMode = () => (IS_IOS ? "safari" : "default");
+
+  // Адрес, по которому нужно перейти, чтобы ссылка открылась в выбранном браузере.
+  function openTarget(url, mode) {
+    if (!g.TBCrypto.isSafeUrl(url)) return "";
+    const u = new URL(url);
+    const https = u.protocol === "https:";
+    const rest = url.replace(/^https?:\/\//i, "");
+    if (IS_IOS) {
+      if (mode === "safari") return (https ? "x-safari-https://" : "x-safari-http://") + rest;
+      if (mode === "chrome") return (https ? "googlechromes://" : "googlechrome://") + rest;
+      if (mode === "yandex") return "yandexbrowser-open-url://" + encodeURIComponent(url);
+      if (mode === "firefox") return "firefox://open-url?url=" + encodeURIComponent(url);
+      return url;
+    }
+    if (IS_ANDROID) {
+      const pkg = { chrome: "com.android.chrome", yandex: "com.yandex.browser", firefox: "org.mozilla.firefox" }[mode];
+      if (pkg && !u.hash) {
+        return `intent://${rest}#Intent;scheme=${https ? "https" : "http"};package=${pkg};` +
+          `S.browser_fallback_url=${encodeURIComponent(url)};end`;
+      }
+    }
+    return url;
   }
 
   g.KV = KV;
-  g.TB = { core, push: { register, unregister }, wipe, server, DEFAULT_SERVER, cleanUrl };
+  g.TB = {
+    core, push: { register, unregister }, wipe, server, DEFAULT_SERVER, cleanUrl,
+    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID
+  };
 })(self);

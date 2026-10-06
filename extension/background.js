@@ -58,11 +58,22 @@ async function sendActive(toIds, tab) {
   return { entry };
 }
 
+// Значок: число непрочитанных полученных вкладок; после отправки на 2.5 с — ✓ или !
+let flashUntil = 0;
+async function updateBadge() {
+  if (Date.now() < flashUntil) return;
+  try {
+    const n = await core.unreadCount();
+    api.action.setBadgeBackgroundColor?.({ color: "#2563eb" });
+    api.action.setBadgeText({ text: n ? String(Math.min(n, 99)) : "" });
+  } catch {}
+}
 function flashBadge(ok) {
   try {
+    flashUntil = Date.now() + 2500;
     api.action.setBadgeBackgroundColor?.({ color: ok ? "#16a34a" : "#dc2626" });
     api.action.setBadgeText({ text: ok ? "✓" : "!" });
-    setTimeout(() => { try { api.action.setBadgeText({ text: "" }); } catch {} }, 2500);
+    setTimeout(() => { flashUntil = 0; updateBadge(); }, 2600);
   } catch {}
 }
 
@@ -84,6 +95,32 @@ function sendWithFeedback(job) {
     .finally(() => { sending = false; });
 }
 
+// ---------- режим кнопки: окно с «Отправить» или отправка сразу по клику ----------
+async function applyClickMode() {
+  try {
+    const { clickMode } = await api.storage.local.get("clickMode");
+    await api.action.setPopup({ popup: clickMode === "instant" ? "" : "popup.html" });
+    await api.action.setTitle({ title: clickMode === "instant" ? "Tab Bridge — отправить эту вкладку" : "Tab Bridge" });
+  } catch {}
+}
+
+// Куда отправлять без выбора: настройка quickTarget = "last" | "all" | id устройства
+async function quickTargets() {
+  const i = await core.info();
+  const ids = new Set(i.devices.map((d) => d.id));
+  const { quickTarget = "last" } = await api.storage.local.get("quickTarget");
+  if (quickTarget === "all") return [];
+  if (quickTarget !== "last" && ids.has(quickTarget)) return [quickTarget];
+  return i.lastTargets.filter((id) => ids.has(id));
+}
+
+// В режиме «сразу» клик по значку приходит сюда (в режиме окна браузер открывает окно сам)
+api.action.onClicked.addListener(async (tab) => {
+  const i = await core.info().catch(() => null);
+  if (i && !i.devices.length) return api.runtime.openOptionsPage();
+  sendWithFeedback(async () => sendActive(await quickTargets(), tab));
+});
+
 // ---------- приём ----------
 async function openTab(url, active) {
   if (!C.isSafeUrl(url)) return null;
@@ -101,7 +138,17 @@ async function afterHandle(res) {
     await init();
     await setupMenus();
     reconnect();
+    try {
+      api.notifications?.create("tb-removed", {
+        type: "basic", iconUrl: api.runtime.getURL("icons/icon128.png"),
+        title: "Tab Bridge: компьютер отключён",
+        message: "Этот компьютер удалили из списка на другом устройстве. Чтобы подключить снова — вставьте ключ группы в настройках."
+      });
+    } catch {}
     return res;
+  }
+  if (res.clockSkew) {
+    await api.storage.local.set({ lastWarning: "Часы этого или другого устройства расходятся больше чем на 10 минут — сообщения отбрасываются. Проверьте дату и время." });
   }
   if (res.devicesChanged) setupMenus();
   const s = await api.storage.local.get(["autoOpen", "focusOpened", "notify", "tabIds"]);
@@ -124,6 +171,7 @@ async function afterHandle(res) {
     }
   }
   if (res.fresh.length) await api.storage.local.set({ tabIds: Object.fromEntries(Object.entries(tabIds).slice(-50)) });
+  if (res.fresh.length || res.devicesChanged) updateBadge();
   return res;
 }
 
@@ -134,7 +182,7 @@ async function poll() {
     await api.storage.local.set({ lastPoll: Date.now(), lastError: "" });
     return res;
   } catch (e) {
-    const text = e instanceof TypeError ? "нет соединения с сервером (проверьте интернет)" : String(e?.message || e);
+    const text = e?.name === "TypeError" ? "нет соединения с сервером (проверьте интернет)" : String(e?.message || e);
     await api.storage.local.set({ lastError: text, lastPoll: Date.now() });
     throw e;
   }
@@ -205,14 +253,10 @@ api.contextMenus?.onClicked.addListener((info, tab) => {
   else if (kind === "tb-page") sendWithFeedback(() => sendActive(to, tab));
 });
 
-// Alt+Shift+S — на те же устройства, что и в прошлый раз (или на все)
+// Alt+Shift+S — туда же, куда быстрая отправка (настройка «Куда отправлять без выбора»)
 api.commands?.onCommand.addListener((cmd, tab) => {
   if (cmd !== "send-current-tab") return;
-  sendWithFeedback(async () => {
-    const i = await core.info();
-    const ids = new Set(i.devices.map((d) => d.id));
-    return sendActive(i.lastTargets.filter((id) => ids.has(id)), tab);
-  });
+  sendWithFeedback(async () => sendActive(await quickTargets(), tab));
 });
 
 api.notifications?.onClicked.addListener(async (nid) => {
@@ -231,7 +275,8 @@ api.notifications?.onClicked.addListener(async (nid) => {
     } catch {}
   }
   await openTab(h.url, true);
-  core.markOpened(id);
+  await core.markOpened(id);
+  updateBadge();
 });
 
 // ---------- связь с окном расширения и настройками ----------
@@ -242,7 +287,7 @@ async function handle(msg, sender) {
     case "info": {
       const i = await core.info();
       const t = await getActiveTab().catch(() => null);
-      const s = await api.storage.local.get(["lastPoll", "lastError"]);
+      const s = await api.storage.local.get(["lastPoll", "lastError", "lastWarning", "clickMode"]);
       delete i.secret;
       return { ...i, tab: t ? { title: t.title, url: t.url } : null, ...s };
     }
@@ -251,12 +296,16 @@ async function handle(msg, sender) {
     case "open-received": {
       const { history } = await core.info();
       const h = history.find((x) => x.id === msg.id);
-      if (h) { await openTab(h.url, true); await core.markOpened(h.id); }
+      if (h) { await openTab(h.url, true); await core.markOpened(h.id); updateBadge(); }
       return {};
     }
+    case "mark-read": await core.markAllRead(); updateBadge(); return {};
+    case "resend": return { entry: await core.resend(msg.id) };
+    case "click-mode": await applyClickMode(); return {};
+    case "dismiss-warning": await api.storage.local.set({ lastWarning: "" }); return {};
     case "remove-device": await core.removeDevice(msg.id); await setupMenus(); return {};
     case "rename": await core.rename(msg.name); return {};
-    case "clear-history": await core.clearHistory(); return {};
+    case "clear-history": await core.clearHistory(); updateBadge(); return {};
     case "set-key": {
       // новый ключ (свой или вставленный с другого ПК): подключаемся заново
       const bad = C.checkSecret(msg.secret);
@@ -284,6 +333,7 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 api.runtime.onInstalled.addListener(async (details) => {
   await init().catch(() => {});
   setupMenus();
+  applyClickMode();
   wake();
   if (details?.reason === "install") {
     api.tabs.create({ url: api.runtime.getURL("options.html#welcome") }).catch(() => {});
@@ -291,7 +341,9 @@ api.runtime.onInstalled.addListener(async (details) => {
     core.hello(false).catch(() => {}); // после обновления — сразу напомнить о себе
   }
 });
-api.runtime.onStartup.addListener(() => { setupMenus(); wake(); });
+api.runtime.onStartup.addListener(() => { setupMenus(); applyClickMode(); wake(); });
 api.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) wake(); });
 
+applyClickMode();
+updateBadge();
 wake();

@@ -45,6 +45,7 @@
     details .card { margin-top: 10px; }
     h3 { font-size: 14px; margin: 0 0 6px; }
     hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+    select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   </style>
 </head>
 <body>
@@ -93,6 +94,20 @@
     </div>
   </div>
 
+  <h2 id="button">Кнопка Tab Bridge</h2>
+  <div class="card">
+    <div class="muted" style="margin-bottom:4px">Что происходит при нажатии на значок Tab Bridge справа от адресной строки:</div>
+    <label class="check"><input type="radio" name="clickMode" value="popup"> Открывается окно, в нём кнопка «Отправить» (и выбор устройства)</label>
+    <label class="check"><input type="radio" name="clickMode" value="instant"> Вкладка отправляется сразу, без окна</label>
+    <label for="quickTarget">Куда отправлять без выбора (быстрая отправка, Alt+Shift+S)</label>
+    <select id="quickTarget"></select>
+    <div class="muted" style="margin-top:8px">
+      В режиме «сразу» историю и выбор устройства можно открыть правым кликом по странице → «Отправить вкладку на…»
+      или здесь, в настройках. Успешная отправка — зелёная ✓ на значке.
+    </div>
+    <div class="actions"><span id="btnMsg" role="status"></span></div>
+  </div>
+
   <h2>Этот компьютер</h2>
   <div class="card">
     <label for="deviceName" style="margin-top:0">Название (так он виден на телефоне)</label>
@@ -115,6 +130,11 @@
         <input id="secret" class="mono" type="password" readonly>
         <button id="show">Показать</button>
         <button id="copy">Копировать</button>
+      </div>
+      <div class="muted" style="margin-top:10px">
+        <b>Резервная копия:</b> сохраните ключ в менеджере паролей. Если браузер переустановят,
+        вставьте его в «Подключить к другой группе» — и устройства снова будут вместе
+        (старую запись этого компьютера на телефоне потом можно удалить).
       </div>
       <div class="actions">
         <button id="newKey">Сменить ключ</button>

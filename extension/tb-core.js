@@ -15,7 +15,7 @@
   const MAX_SEEN = 500;
   const MAX_HISTORY = 50;
   const MAX_SENT = 50;
-  const RANK = { sent: 0, delivered: 1, opened: 2 };
+  const RANK = { failed: -1, sent: 0, delivered: 1, opened: 2 };
   const nowSec = () => Math.floor(Date.now() / 1000);
   const cleanUrl = (u) => String(u || "").trim().replace(/\/+$/, "");
   const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -31,7 +31,7 @@
       secret: "", server: defaultServer, deviceId: "", deviceName: "",
       startTs: 0, sinceTs: 0, seen: [], nonces: [],
       devices: [], removed: [], history: [], sent: [],
-      lastHello: 0, lastTargets: []
+      lastHello: 0, lastTargets: [], pendingBye: []
     };
 
     let chain = Promise.resolve();
@@ -73,7 +73,7 @@
         secret: C.normalizeSecret(secret), server: cleanUrl(server) || defaultServer,
         deviceId: randId(12), deviceName: String(name || "").slice(0, 40) || "Устройство",
         startTs: now, sinceTs: 0, seen: [], nonces: [], devices: [], removed: [],
-        history: [], sent: [], lastHello: 0, lastTargets: []
+        history: [], sent: [], lastHello: 0, lastTargets: [], pendingBye: []
       });
       try { await hello(false); } catch {}
     }
@@ -88,6 +88,7 @@
     async function maybeHello() {
       const s = await load();
       if (s.secret && s.deviceId && nowSec() - s.lastHello > HELLO_EVERY) await hello(false);
+      await flushPending();
     }
 
     async function rename(name) {
@@ -95,18 +96,34 @@
       try { await hello(false); } catch {}
     }
 
-    // Удалить устройство из группы у всех. Если это устройство в сети, оно само отключится.
+    // Удалить устройство из группы у всех. Здесь — сразу; остальным сообщаем, как только будет связь
+    // (если сейчас нет интернета, сообщение повторится при следующей проверке).
     async function removeDevice(id) {
-      const s = await load();
-      await control(s, { k: "bye", x: id });
       await serial(async () => {
         const cur = await load();
         await kv.setMany({
           devices: cur.devices.filter((d) => d.id !== id),
           removed: [...new Set([...cur.removed, id])].slice(-200),
-          lastTargets: cur.lastTargets.filter((x) => x !== id)
+          lastTargets: cur.lastTargets.filter((x) => x !== id),
+          pendingBye: [...new Set([...cur.pendingBye, id])]
         });
       });
+      await flushPending();
+    }
+
+    async function flushPending() {
+      const s = await load();
+      if (!s.secret || !s.deviceId || !s.pendingBye.length) return;
+      const done = [];
+      for (const id of s.pendingBye) {
+        try { await control(s, { k: "bye", x: id }); done.push(id); } catch { break; }
+      }
+      if (done.length) {
+        await serial(async () => {
+          const cur = await load();
+          await kv.setMany({ pendingBye: cur.pendingBye.filter((x) => !done.includes(x)) });
+        });
+      }
     }
 
     // Отключить это устройство: сообщить остальным и забыть ключ (данные стирает хост).
@@ -128,7 +145,8 @@
       const msg = await C.seal(t.group, {
         k: "link", i, u: url, t: String(title || "").slice(0, 300), f: s.deviceName, d: s.deviceId, to: targets
       });
-      await Promise.all(targets.map(async (id) => publish(s, await C.topicFor(t.group, "inbox:" + id), msg)));
+      // Запись в «Отправлено» появляется ДО отправки: иначе быстрый ответ «доставлено»
+      // мог прийти раньше, чем запись, и статус застрял бы на «отправлено».
       const entry = {
         i, url, title: String(title || "").slice(0, 300) || url, time: nowSec(),
         to: targets.map((id) => ({ id, name: known.get(id).name, s: "sent" }))
@@ -137,7 +155,31 @@
         const cur = await load();
         await kv.setMany({ sent: [entry, ...cur.sent].slice(0, MAX_SENT), lastTargets: targets });
       });
+      const results = await Promise.allSettled(targets.map(async (id) => publish(s, await C.topicFor(t.group, "inbox:" + id), msg)));
+      const failed = targets.filter((_, n) => results[n].status === "rejected");
+      if (failed.length) {
+        await serial(async () => {
+          const cur = await load();
+          const e = cur.sent.find((x) => x.i === i);
+          if (e) for (const tg of e.to) if (failed.includes(tg.id) && tg.s === "sent") tg.s = "failed";
+          await kv.setMany({ sent: cur.sent });
+        });
+        for (const tg of entry.to) if (failed.includes(tg.id)) tg.s = "failed";
+        if (failed.length === targets.length) {
+          const err = results.find((r) => r.status === "rejected").reason;
+          throw (err && err.name === "TypeError") ? new Error("Нет соединения с сервером — проверьте интернет.") : err;
+        }
+      }
       return entry;
+    }
+
+    // Повторить неудавшуюся отправку
+    async function resend(linkId) {
+      const s = await load();
+      const e = s.sent.find((x) => x.i === linkId);
+      if (!e) throw new Error("Запись не найдена.");
+      const ids = e.to.filter((x) => x.s === "failed").map((x) => x.id);
+      return sendLink(e.url, e.title, ids.length ? ids : e.to.map((x) => x.id));
     }
 
     async function ack(s, linkId, state) {
@@ -159,7 +201,7 @@
 
     // ---------- приём ----------
 
-    const EMPTY = { fresh: [], devicesChanged: false, sentChanged: false, removedMe: false };
+    const EMPTY = { fresh: [], devicesChanged: false, sentChanged: false, removedMe: false, clockSkew: 0 };
 
     function handle(msgs, { advance = false } = {}) {
       return serial(async () => {
@@ -172,7 +214,7 @@
         const devices = new Map(s.devices.map((d) => [d.id, d]));
         const sent = s.sent;
         const fresh = [];
-        let needReply = false, devicesChanged = false, sentChanged = false, removedMe = false;
+        let needReply = false, devicesChanged = false, sentChanged = false, removedMe = false, clockSkew = 0;
         let maxTime = s.sinceTs;
 
         const touch = (id, time) => {
@@ -189,7 +231,7 @@
           if (!r || nonces.has(r.nonce)) continue;             // чужое, подделка или повтор
           nonces.add(r.nonce);
           const o = r.obj;
-          if (Math.abs(o.ts - m.time) > C.MAX_CLOCK_SKEW) continue;
+          if (Math.abs(o.ts - m.time) > C.MAX_CLOCK_SKEW) { clockSkew++; continue; }
           const from = String(o.d || "");
           if (!from || from === s.deviceId) continue;           // своё
           const k = o.k || (o.u ? "link" : "");
@@ -232,21 +274,37 @@
 
         const have = new Set(s.history.map((h) => h.id));
         const add = fresh.filter((h) => !have.has(h.id)).reverse();
-        const patch = {
-          seen: [...seen].slice(-MAX_SEEN), nonces: [...nonces].slice(-MAX_SEEN),
-          devices: [...devices.values()], removed: [...removed].slice(-200), sent,
-          history: [...add, ...s.history].slice(0, MAX_HISTORY)
-        };
+        // Сохраняем только то, что изменилось: на телефоне страница и фоновый обработчик
+        // работают параллельно, и запись «всего сразу» могла бы затереть чужие свежие изменения.
+        const patch = { seen: [...seen].slice(-MAX_SEEN), nonces: [...nonces].slice(-MAX_SEEN) };
+        if (devicesChanged) { patch.devices = [...devices.values()]; patch.removed = [...removed].slice(-200); }
+        if (sentChanged) {
+          // статусы накладываем на свежую версию списка, а не на прочитанную в начале
+          const cur = (await kv.getAll(["sent"])).sent || [];
+          for (const e of cur) {
+            const mine = sent.find((x) => x.i === e.i);
+            if (mine) for (const tg of e.to) {
+              const m2 = mine.to.find((x) => x.id === tg.id);
+              if (m2 && (RANK[m2.s] ?? 0) > (RANK[tg.s] ?? 0)) tg.s = m2.s;
+            }
+          }
+          patch.sent = cur;
+        }
+        if (add.length) {
+          const curH = (await kv.getAll(["history"])).history || [];
+          const ids = new Set(curH.map((h) => h.id));
+          patch.history = [...add.filter((h) => !ids.has(h.id)), ...curH].slice(0, MAX_HISTORY);
+        }
         if (advance) patch.sinceTs = maxTime;
         await kv.setMany(patch);
-        return { fresh: add, devicesChanged, sentChanged, removedMe, needReply, s };
+        return { fresh: add, devicesChanged, sentChanged, removedMe, needReply, clockSkew, s };
       }).then(async (res) => {
         if (!res.s) return res;
         if (!res.removedMe) {
           if (res.needReply) hello(true).catch(() => {});
           await Promise.all(res.fresh.map((h) => ack(res.s, h.id, "delivered")));
         }
-        return { fresh: res.fresh, devicesChanged: res.devicesChanged, sentChanged: res.sentChanged, removedMe: res.removedMe };
+        return { fresh: res.fresh, devicesChanged: res.devicesChanged, sentChanged: res.sentChanged, removedMe: res.removedMe, clockSkew: res.clockSkew };
       });
     }
 
@@ -259,7 +317,9 @@
       if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
       const msgs = (await r.text()).split("\n").filter(Boolean)
         .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-      return handle(msgs, { advance: true });
+      const res = await handle(msgs, { advance: true });
+      flushPending().catch(() => {});
+      return res;
     }
 
     async function wsUrl() {
@@ -285,13 +345,29 @@
       };
     }
 
+    // Сколько полученных за сутки ссылок ещё не открыто (для значка расширения)
+    async function unreadCount() {
+      const s = await load();
+      const since = nowSec() - 86400;
+      return s.history.filter((h) => !h.opened && !h.read && h.time >= since).length;
+    }
+
+    // «Прочитано» — только для счётчика; статус «открыто» отправителю не меняет
+    async function markAllRead() {
+      await serial(async () => {
+        const cur = await load();
+        cur.history.forEach((h) => { h.read = true; });
+        await kv.setMany({ history: cur.history });
+      });
+    }
+
     async function clearHistory() {
       await serial(() => kv.setMany({ history: [], sent: [] }));
     }
 
     return {
       pair, hello, maybeHello, rename, removeDevice, leave,
-      sendLink, markOpened, handle, poll, wsUrl, inboxTopic, info, clearHistory, serial
+      sendLink, resend, markOpened, markAllRead, unreadCount, handle, poll, wsUrl, inboxTopic, info, clearHistory, serial
     };
   }
 

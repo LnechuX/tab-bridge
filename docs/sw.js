@@ -4,7 +4,7 @@
 // 2) Позволяет установить страницу на главный экран и попасть в меню «Поделиться».
 importScripts("tb-crypto.js", "tb-core.js", "shared.js");
 
-const CACHE = "tab-bridge-v4";
+const CACHE = "tab-bridge-v5";
 const ICON = "icons/icon-192.png";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -70,14 +70,32 @@ async function onPush(event) {
 
 self.addEventListener("push", (e) => e.waitUntil(onPush(e)));
 
+async function onNotificationClick(d) {
+  const mode = await KV.get("openIn", TB.defaultOpenMode());
+  const target = TB.openTarget(d.url, mode);
+  if (!target) return;
+  if (target === d.url) {
+    // обычная ссылка: браузер телефона откроет её сам
+    await Promise.all([self.clients.openWindow(d.url), TB.core.markOpened(d.id).catch(() => {})]);
+    return;
+  }
+  // «Переходник» в другой браузер (Safari, Chrome…) из фона открыть нельзя —
+  // передаём его странице приложения, она перейдёт по нему.
+  const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const c = list.find((x) => new URL(x.url).origin === self.location.origin);
+  if (c) {
+    try { await c.focus(); } catch {}
+    c.postMessage({ type: "tb-open", id: d.id });
+  } else {
+    await self.clients.openWindow("./#o=" + encodeURIComponent(d.id));
+  }
+}
+
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const d = e.notification.data || {};
   if (!d.url || !TBCrypto.isSafeUrl(d.url)) return;
-  e.waitUntil(Promise.all([
-    self.clients.openWindow(d.url),
-    TB.core.markOpened(d.id).catch(() => {})
-  ]));
+  e.waitUntil(onNotificationClick(d).catch(() => {}));
 });
 
 self.addEventListener("pushsubscriptionchange", (e) => {

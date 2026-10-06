@@ -3,6 +3,12 @@
 (async function () {
   "use strict";
 
+  // Защита от встраивания в чужой сайт (кликджекинг): работаем только как самостоятельная страница.
+  if (window.top !== window.self) {
+    document.documentElement.textContent = "Tab Bridge нельзя открывать внутри другого сайта.";
+    return;
+  }
+
   const C = window.TBCrypto;
   const core = TB.core;
   const $ = (id) => document.getElementById(id);
@@ -41,6 +47,7 @@
   // Ключ из QR-кода — во фрагменте (#k=...), который браузер не отправляет на сервер. Сразу стираем его.
   const frag = new URLSearchParams(location.hash.slice(1));
   const incoming = { secret: frag.get("k") || "", server: frag.get("s") || "" };
+  let openId = frag.get("o") || "";   // открыть ссылку (пришли из уведомления)
   const q = new URLSearchParams(location.search);
   let sharedUrl = C.extractUrl([q.get("url"), q.get("text"), q.get("title")].filter(Boolean).join(" "));
   const sharedTitle = q.get("title") || "";
@@ -198,9 +205,71 @@
     finally { $("pushBtn").disabled = false; }
   });
 
+  // ---------- открытие ссылок ----------
+  const modeName = (m) => (TB.OPEN_MODES.find((x) => x[0] === m) || [m, m])[1];
+  async function openMode() {
+    const m = await KV.get("openIn", TB.defaultOpenMode());
+    return TB.OPEN_MODES.some((x) => x[0] === m) ? m : TB.defaultOpenMode();
+  }
+  // Режим держим в памяти: открывать нужно синхронно по нажатию, иначе iOS заблокирует окно.
+  let currentMode = await openMode();
+  function openLink(h, mode) {
+    const target = TB.openTarget(h.url, mode || currentMode);
+    if (!target) return;
+    if (target === h.url) window.open(h.url, "_blank", "noopener,noreferrer");
+    else location.href = target;   // переход в выбранный браузер (Safari, Chrome…)
+    core.markOpened(h.id).then(render).catch(() => {});
+  }
+  // Открыть ссылку из уведомления. Браузер может не разрешить открыть её без нажатия —
+  // поэтому сверху показываем карточку с кнопкой «Открыть»: тогда хватит одного касания.
+  let pendingOpen = null;
+  async function openById(id) {
+    const h = (await core.info()).history.find((x) => x.id === id);
+    if (!h) return;
+    pendingOpen = h;
+    $("openTitle").textContent = h.title || h.url;
+    $("openGo").textContent = currentMode === "app" || currentMode === "default" ? "Открыть" : `Открыть в ${modeName(currentMode)}`;
+    $("openCard").hidden = false;
+    const target = TB.openTarget(h.url, currentMode);
+    if (target && target !== h.url) {
+      try { location.href = target; core.markOpened(h.id).then(render).catch(() => {}); } catch {}
+    }
+  }
+  window.addEventListener("hashchange", () => {
+    const o = new URLSearchParams(location.hash.slice(1)).get("o");
+    if (o) { history.replaceState(null, "", location.pathname); openById(o); }
+  });
+  $("openGo").addEventListener("click", () => { if (pendingOpen) openLink(pendingOpen); $("openCard").hidden = true; pendingOpen = null; });
+  $("openClose").addEventListener("click", () => { $("openCard").hidden = true; pendingOpen = null; });
+
+  function showSheet(h) {
+    $("sheetTitle").textContent = h.title || h.url;
+    const box = $("sheetActions");
+    box.textContent = "";
+    for (const [m, label] of TB.OPEN_MODES) {
+      const b = el("button", "", m === "app" ? "Открыть внутри Tab Bridge" : m === "default" ? "Открыть в браузере по умолчанию" : `Открыть в ${label}`);
+      b.addEventListener("click", () => { hideSheet(); openLink(h, m); });
+      box.append(b);
+    }
+    const copy = el("button", "", "Скопировать ссылку");
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(h.url); copy.textContent = "✓ Скопировано"; }
+      catch { copy.textContent = "Не удалось скопировать"; }
+      setTimeout(hideSheet, 700);
+    });
+    box.append(copy);
+    $("sheet").hidden = false;
+  }
+  function hideSheet() { $("sheet").hidden = true; }
+  $("sheetCancel").addEventListener("click", hideSheet);
+  $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) hideSheet(); });
+
   // ---------- отрисовка ----------
   let view = "recv";
-  const STATE = { sent: ["отправлено", ""], delivered: ["доставлено ✓", "st-delivered"], opened: ["открыто ✓✓", "st-opened"] };
+  const STATE = {
+    failed: ["не отправлено", "err"], sent: ["отправлено", ""],
+    delivered: ["доставлено ✓", "st-delivered"], opened: ["открыто ✓✓", "st-opened"]
+  };
 
   async function render() {
     const i = await core.info();
@@ -245,12 +314,15 @@
     for (const it of items.slice(0, 30)) {
       if (view === "recv") {
         if (!C.isSafeUrl(it.url)) continue;
-        const li = el("li"), a = el("a");
-        a.href = it.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        const li = el("li", "recv" + (it.opened ? "" : " unread")), a = el("a");
+        a.href = it.url; a.rel = "noopener noreferrer";
         a.append(el("span", "t", it.title || it.url),
           el("span", "m", [it.from ? `от «${it.from}»` : "", hostOf(it.url), ago(it.time), it.opened ? "открыто" : ""].filter(Boolean).join(" · ")));
-        a.addEventListener("click", () => { core.markOpened(it.id).then(render).catch(() => {}); });
-        li.append(a);
+        a.addEventListener("click", (e) => { e.preventDefault(); openLink(it); });
+        const more = el("button", "more", "⋯");
+        more.setAttribute("aria-label", "Другие способы открыть");
+        more.addEventListener("click", () => showSheet(it));
+        li.append(a, more);
         list.append(li);
       } else {
         const li = el("li", "sent");
@@ -263,6 +335,16 @@
         });
         m.append(document.createTextNode(` · ${ago(it.time)}`));
         li.append(m);
+        if (it.to.some((t) => t.s === "failed")) {
+          const b = el("button", "retry", "Повторить");
+          b.addEventListener("click", async () => {
+            b.disabled = true;
+            try { await core.resend(it.i); setMsg($("sendMsg"), "✓ Отправлено повторно", "ok"); }
+            catch (e) { setMsg($("sendMsg"), String(e?.message || e), "err"); }
+            render();
+          });
+          li.append(b);
+        }
         list.append(li);
       }
     }
@@ -343,7 +425,30 @@
   $("openSettings").addEventListener("click", async () => {
     show("settings");
     $("myName").value = (await core.info()).me.name;
+    const sel = $("openIn");
+    sel.textContent = "";
+    for (const [m, label] of TB.OPEN_MODES) { const o = el("option", "", label); o.value = m; sel.append(o); }
+    sel.value = await openMode();
+    renderOpenHint();
     setMsg($("settingsMsg"), "");
+  });
+  function renderOpenHint() {
+    const m = $("openIn").value;
+    $("openHint").textContent =
+      TB.IS_IOS && m === "safari" ? "Нужна iOS 15 или 17 и новее (на iOS 16 Safari так не открывается — выберите другой браузер)." :
+      m === "app" ? "Ссылка откроется во встроенном окне поверх Tab Bridge." :
+      m === "default" ? "Ссылка откроется так, как настроено в телефоне." :
+      `Нужно, чтобы ${modeName(m)} был установлен. Нажмите «Проверить».`;
+  }
+  $("openIn").addEventListener("change", async () => {
+    await KV.set("openIn", $("openIn").value);
+    currentMode = $("openIn").value;
+    renderOpenHint();
+    setMsg($("settingsMsg"), "Сохранено ✓", "ok");
+  });
+  $("testOpen").addEventListener("click", () => {
+    const t = TB.openTarget("https://example.com/", $("openIn").value);
+    if (t === "https://example.com/") window.open(t, "_blank", "noopener,noreferrer"); else location.href = t;
   });
   $("closeSettings").addEventListener("click", showApp);
   $("saveName").addEventListener("click", async () => {
@@ -363,14 +468,16 @@
       await TB.wipe(await swReady, false);
       return showSetup("Этот телефон удалили из списка на другом устройстве. Чтобы подключить снова — отсканируйте QR-код.");
     }
+    if (r.clockSkew) setMsg($("state"), "Часы телефона или компьютера расходятся больше чем на 10 минут — проверьте дату и время.", "err small");
     if (r.fresh.length && navigator.vibrate) try { navigator.vibrate(60); } catch {}
     if (r.fresh.length || r.devicesChanged || r.sentChanged) render();
   }
 
   async function poll() {
     try {
-      await onResult(await core.poll());
-      setMsg($("state"), "Проверено в " + new Date().toLocaleTimeString(), "muted small");
+      const r = await core.poll();
+      await onResult(r);
+      if (!r.clockSkew) setMsg($("state"), "Проверено в " + new Date().toLocaleTimeString(), "muted small");
     } catch (e) {
       setMsg($("state"), "Нет связи с сервером: " + (e?.message || e), "err small");
     }
@@ -414,12 +521,14 @@
       if (!e.data) return;
       if (e.data.type === "tb-updated" && !$("app").hidden) render();
       if (e.data.type === "tb-removed") showSetup("Этот телефон удалили из списка на другом устройстве.");
+      if (e.data.type === "tb-open" && e.data.id) openById(String(e.data.id));
     });
   }
 
   // ---------- запуск ----------
   if (await paired() && !incoming.secret) {
     await showApp();
+    if (openId) { const id = openId; openId = ""; openById(id); }
     refreshPush();
     maybeSendShared();
   } else if (isIOS && !isStandalone && incoming.secret) {
