@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Bridge — вкладки между устройствами",
+  "short_name": "Tab Bridge",
+  "version": "2.1.0",
+  "description": "Отправляйте вкладку с ПК на телефон и обратно. Сквозное шифрование: сервер не видит ваши ссылки.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "contextMenus",
+    "notifications",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://ntfy.sh/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "config.js",
+      "tb-crypto.js",
+      "background.js"
+    ]
+  },
+  "action": {
+    "default_title": "Tab Bridge",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "send-current-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Отправить текущую вкладку на свои устройства"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tab-bridge@local.extension",
+      "strict_min_version": "121.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "121.0"
+    }
+  }
+}

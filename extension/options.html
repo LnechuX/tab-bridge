@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Tab Bridge — настройки</title>
+  <link rel="stylesheet" href="common.css">
+  <style>
+    main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 17px; margin: 28px 0 10px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+    .welcome { background: var(--accent); color: var(--accent-text); border-radius: 14px; padding: 16px 18px; margin-top: 18px; }
+    .welcome b { font-size: 17px; display: block; margin-bottom: 2px; }
+    label { display: block; font-weight: 600; margin: 14px 0 6px; }
+    .inline { display: flex; gap: 8px; flex-wrap: wrap; }
+    .inline input { flex: 1 1 220px; min-width: 0; }
+    .check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 10px 0 0; }
+    .actions { margin-top: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .steps { margin: 0 0 14px; padding-left: 22px; }
+    .steps li { margin: 6px 0; }
+    .card input[type="text"], .card input[type="url"], .card input[type="password"] { background: var(--bg); }
+    input[type="password"] {
+      width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--line); color: var(--text);
+    }
+    #secret { font-family: ui-monospace, Consolas, monospace; letter-spacing: .03em; }
+    .badge { font-size: 12px; color: var(--ok); }
+    #qrBtn { font-size: 15px; padding: 11px 18px; }
+    #qrBox { margin-top: 16px; text-align: center; }
+    #qr { display: inline-block; background: #fff; padding: 10px; border-radius: 14px; }
+    #qr svg { width: 260px; height: 260px; display: block; }
+    .warn { color: var(--err); font-size: 12px; }
+    details { margin-top: 28px; }
+    details > summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+    details .card { margin-top: 10px; }
+    h3 { font-size: 14px; margin: 0 0 6px; }
+    hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Tab Bridge</h1>
+  <div class="badge">🔒 Сквозное шифрование: никто, кроме ваших устройств, не видит ваши ссылки</div>
+
+  <div class="welcome" id="welcome" hidden>
+    <b>Расширение установлено ✓</b>
+    Осталось подключить телефон — это займёт полминуты.
+  </div>
+
+  <h2>Подключить телефон</h2>
+  <div class="card">
+    <ol class="steps">
+      <li>Нажмите «Показать QR-код».</li>
+      <li>Наведите на код камеру телефона и откройте ссылку.</li>
+      <li>На телефоне нажмите «Подключить». Готово!</li>
+    </ol>
+    <button id="qrBtn" class="primary">Показать QR-код</button>
+    <div id="noPhone" class="warn" style="margin-top:10px" hidden>
+      Адрес страницы для телефона не задан. Укажите его в разделе «Дополнительно» ниже.
+    </div>
+    <div id="qrBox" hidden>
+      <div id="qr"></div>
+      <div class="muted" style="margin-top:8px">
+        Совет: на телефоне добавьте страницу на главный экран — тогда на Android
+        Tab Bridge появится в меню «Поделиться».
+      </div>
+      <div class="warn" style="margin-top:4px">В коде ваш секретный ключ — не показывайте его посторонним.</div>
+    </div>
+  </div>
+
+  <h2>Это устройство</h2>
+  <div class="card">
+    <label for="deviceName" style="margin-top:0">Название (видно только на ваших устройствах)</label>
+    <input id="deviceName" type="text" maxlength="40">
+    <label class="check"><input id="autoOpen" type="checkbox"> Сразу открывать пришедшие вкладки</label>
+    <label class="check"><input id="focusOpened" type="checkbox"> …и переключаться на них</label>
+    <label class="check"><input id="notify" type="checkbox"> Показывать уведомление</label>
+    <div class="actions">
+      <button id="clearHistory">Очистить историю</button>
+      <span id="basicMsg" role="status"></span>
+    </div>
+  </div>
+
+  <details id="advanced">
+    <summary>Дополнительно</summary>
+    <div class="card">
+      <h3>Второй компьютер</h3>
+      <div class="muted">Установите расширение на втором компьютере и вставьте в его настройках этот ключ.</div>
+      <label for="secret">Секретный ключ</label>
+      <div class="inline">
+        <input id="secret" type="password" spellcheck="false" autocomplete="off">
+        <button id="show">Показать</button>
+        <button id="copy">Копировать</button>
+        <button id="gen" title="Создать новый случайный ключ">Новый</button>
+      </div>
+      <div class="muted" style="margin-top:6px">
+        Ключ хранится только на ваших устройствах. Не пересылайте его через мессенджеры и почту.
+        Если ключ мог утечь — нажмите «Новый» и подключите устройства заново.
+      </div>
+
+      <hr>
+      <label for="phoneUrl" style="margin-top:0">Адрес страницы для телефона</label>
+      <input id="phoneUrl" type="url" spellcheck="false">
+      <div class="muted" style="margin-top:6px">Оставьте пустым, чтобы использовать адрес по умолчанию.</div>
+
+      <label for="server">Сервер ntfy (https)</label>
+      <input id="server" type="url" spellcheck="false">
+      <div class="muted" style="margin-top:6px">
+        Сервер видит только зашифрованные сообщения. Свой сервер скрывает ещё и время отправки.
+      </div>
+
+      <div class="actions">
+        <button id="save" class="primary">Сохранить</button>
+        <span id="msg" role="status"></span>
+      </div>
+    </div>
+  </details>
+</main>
+<script src="config.js"></script>
+<script src="tb-crypto.js"></script>
+<script src="lib/qrcode.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

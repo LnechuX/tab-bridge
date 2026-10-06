@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Tab Bridge</title>
+  <link rel="stylesheet" href="common.css">
+  <style>
+    body { width: 340px; max-width: 100%; padding: 14px; }
+    header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    header img { width: 22px; height: 22px; }
+    header .name { font-weight: 600; flex: 1; }
+    .lock { font-size: 12px; color: var(--ok); margin: 0 0 10px; }
+    #send { width: 100%; padding: 12px; font-size: 15px; }
+    #status { min-height: 18px; margin: 8px 0 4px; font-size: 13px; overflow-wrap: anywhere; }
+    .head { display: flex; align-items: baseline; justify-content: space-between; margin: 14px 0 6px; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; }
+    .link { background: none; border: 0; padding: 0; color: var(--muted); font-size: 12px; text-decoration: underline; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li a {
+      display: block; text-decoration: none; color: var(--text);
+      padding: 7px 9px; border-radius: 8px; border: 1px solid transparent;
+    }
+    li a:hover { background: var(--card); border-color: var(--line); }
+    li .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row { display: flex; gap: 8px; margin-top: 10px; }
+    .row button { flex: 1; }
+    #empty { padding: 6px 2px; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="icons/icon48.png" alt="">
+    <span class="name">Tab Bridge</span>
+    <span class="muted" id="device"></span>
+  </header>
+  <div class="lock">🔒 Сквозное шифрование включено</div>
+
+  <button id="send" class="primary">Отправить эту вкладку</button>
+  <div id="status"></div>
+
+  <div class="head">
+    <h2>Пришло недавно</h2>
+    <button class="link" id="clear" hidden>Очистить</button>
+  </div>
+  <ul id="list"></ul>
+  <div id="empty" class="muted">Пока ничего не приходило.</div>
+
+  <div class="row">
+    <button id="check">Проверить</button>
+    <button id="settings">Настройки</button>
+  </div>
+  <div class="muted" id="last" style="margin-top:8px"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

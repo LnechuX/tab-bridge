@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https: wss:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#2563eb">
+  <title>Tab Bridge</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <header>
+    <img src="icons/icon-192.png" alt="" width="28" height="28">
+    <div>
+      <div class="title">Tab Bridge</div>
+      <div class="lock">🔒 Сквозное шифрование</div>
+    </div>
+    <button id="openSettings" class="ghost" hidden>Настройки</button>
+  </header>
+
+  <!-- Подключение / настройки -->
+  <section id="setup" hidden>
+    <div class="card">
+      <h2 id="setupTitle">Подключение</h2>
+      <p class="muted" id="setupHint">Вставьте ключ из настроек расширения или отсканируйте QR-код камерой.</p>
+      <label for="secret">Секретный ключ</label>
+      <input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label class="check"><input id="showSecret" type="checkbox"> Показать ключ</label>
+      <label for="deviceName">Название этого устройства</label>
+      <input id="deviceName" type="text" maxlength="40">
+      <details>
+        <summary>Свой сервер</summary>
+        <label for="server">Сервер ntfy (https)</label>
+        <input id="server" type="url" spellcheck="false">
+      </details>
+      <div class="row">
+        <button id="saveSetup" class="primary">Подключить</button>
+        <button id="cancelSetup" hidden>Отмена</button>
+      </div>
+      <div id="setupMsg" class="msg" role="status"></div>
+      <button id="forget" class="danger" hidden>Забыть ключ и удалить все данные на этом устройстве</button>
+    </div>
+  </section>
+
+  <!-- Основной экран -->
+  <section id="app" hidden>
+    <div class="card">
+      <h2>Отправить на компьютер</h2>
+      <input id="url" type="url" inputmode="url" placeholder="Ссылка https://…" autocomplete="off">
+      <div class="row">
+        <button id="paste">Вставить</button>
+        <button id="send" class="primary">Отправить</button>
+      </div>
+      <div id="sendMsg" class="msg" role="status"></div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h2>Пришло с других устройств</h2>
+        <button id="clear" class="link" hidden>Очистить</button>
+      </div>
+      <ul id="list"></ul>
+      <div id="empty" class="muted">Пока ничего не приходило. Страница проверяет новые вкладки, пока открыта.</div>
+      <div id="state" class="muted small"></div>
+    </div>
+  </section>
+</main>
+<script src="tb-crypto.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
