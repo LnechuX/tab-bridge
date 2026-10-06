@@ -1,27 +1,13 @@
 // Tab Bridge — страница для телефона. Работает в любом браузере, шифрование то же, что в расширении.
-(function () {
+// Данные хранятся в IndexedDB (см. shared.js), чтобы их видел и обработчик push-уведомлений.
+(async function () {
   "use strict";
 
   const C = window.TBCrypto;
+  const I = window.TBInbox;
   const $ = (id) => document.getElementById(id);
-  const DEFAULT_SERVER = "https://ntfy.sh";
-  const MAX_SEEN = 400;
-  const MAX_HISTORY = 30;
-  const FETCH_OPTS = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
+  const FETCH_OPTS = I.FETCH_OPTS;
   const nowSec = () => Math.floor(Date.now() / 1000);
-
-  // ---------- хранилище (только этот браузер на этом устройстве) ----------
-  const store = {
-    get(k, d) {
-      try { const v = localStorage.getItem("tb_" + k); return v == null ? d : JSON.parse(v); } catch { return d; }
-    },
-    set(k, v) { try { localStorage.setItem("tb_" + k, JSON.stringify(v)); } catch {} },
-    wipe() {
-      try {
-        Object.keys(localStorage).filter((k) => k.startsWith("tb_")).forEach((k) => localStorage.removeItem(k));
-      } catch {}
-    }
-  };
 
   function randId(n) {
     const abc = "abcdefghijkmnpqrstuvwxyz23456789";
@@ -36,22 +22,46 @@
     return "Телефон";
   }
 
-  const cleanUrl = (u) => String(u || "").trim().replace(/\/+$/, "");
-  const server = () => cleanUrl(store.get("server", DEFAULT_SERVER)) || DEFAULT_SERVER;
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isStandalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const pushSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+  // ---------- переход со старой версии (localStorage) ----------
+  try {
+    const old = localStorage.getItem("tb_secret");
+    if (old && !(await KV.get("secret", ""))) {
+      const get = (k, d) => { try { const v = localStorage.getItem("tb_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
+      await KV.setMany({
+        secret: get("secret", ""), server: get("server", I.DEFAULT_SERVER), deviceId: get("deviceId", randId(12)),
+        deviceName: get("deviceName", guessName()), startTs: get("startTs", nowSec()), since: get("since", String(nowSec())),
+        seen: get("seen", []), nonces: get("nonces", []), history: get("history", [])
+      });
+    }
+    Object.keys(localStorage).filter((k) => k.startsWith("tb_")).forEach((k) => localStorage.removeItem(k));
+  } catch {}
 
   // ---------- то, что пришло в адресе ----------
   // Ключ из QR-кода приходит во фрагменте (#k=...), который браузер не отправляет на сервер.
-  // Сразу убираем его из адресной строки и истории.
   const frag = new URLSearchParams(location.hash.slice(1));
   const incoming = { secret: frag.get("k") || "", server: frag.get("s") || "" };
-  // «Поделиться» на Android (share target) приходит в параметрах запроса.
+  // «Поделиться» на Android приходит в параметрах запроса.
   const q = new URLSearchParams(location.search);
   const sharedUrl = C.extractUrl([q.get("url"), q.get("text"), q.get("title")].filter(Boolean).join(" "));
   const sharedTitle = q.get("title") || "";
   if (location.hash || location.search) history.replaceState(null, "", location.pathname);
 
+  const swReady = "serviceWorker" in navigator
+    ? navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).catch(() => null)
+    : Promise.resolve(null);
+
+  function setMsg(el, text, cls = "muted") {
+    el.textContent = text;
+    el.className = "msg " + cls;
+  }
+
   // ---------- экраны ----------
-  function showSetup(isEdit) {
+  async function showSetup(isEdit) {
+    stopLive();
     $("app").hidden = true;
     $("openSettings").hidden = true;
     $("setup").hidden = false;
@@ -60,78 +70,141 @@
     $("cancelSetup").hidden = !isEdit;
     $("forget").hidden = !isEdit;
     $("setupHint").textContent = incoming.secret && !isEdit
-      ? "Ключ получен из QR-кода. Проверьте название устройства и нажмите «Подключить»."
-      : "Вставьте ключ из настроек расширения или отсканируйте QR-код камерой телефона.";
-    $("secret").value = C.formatSecret(incoming.secret || store.get("secret", ""));
-    $("server").value = incoming.server || server();
-    $("deviceName").value = store.get("deviceName", "") || guessName();
+      ? "Ключ получен из QR-кода. Нажмите «Подключить»."
+      : "Отсканируйте камерой телефона QR-код из расширения на компьютере или вставьте ключ.";
+    $("secret").value = C.formatSecret(incoming.secret || await KV.get("secret", ""));
+    $("server").value = incoming.server || await I.server();
+    $("deviceName").value = (await KV.get("deviceName", "")) || guessName();
     $("setupMsg").textContent = "";
   }
 
-  function showApp() {
+  async function showApp() {
     $("setup").hidden = true;
     $("app").hidden = false;
     $("openSettings").hidden = false;
-    renderList();
+    await renderList();
+    await renderPush();
     startLive();
-  }
-
-  function setMsg(el, text, cls = "muted") {
-    el.textContent = text;
-    el.className = "msg " + cls;
   }
 
   $("showSecret").addEventListener("change", () => {
     $("secret").type = $("showSecret").checked ? "text" : "password";
   });
 
-  $("saveSetup").addEventListener("click", () => {
+  $("saveSetup").addEventListener("click", async () => {
     const secret = C.normalizeSecret($("secret").value);
-    const srv = cleanUrl($("server").value) || DEFAULT_SERVER;
+    const srv = I.cleanUrl($("server").value) || I.DEFAULT_SERVER;
     const bad = C.checkSecret(secret);
     if (bad) return setMsg($("setupMsg"), bad, "err");
     if (!/^https:\/\/[^/\s]+/i.test(srv)) return setMsg($("setupMsg"), "Сервер должен быть на https://", "err");
 
-    const changed = C.normalizeSecret(store.get("secret", "")) !== secret || server() !== srv;
-    store.set("secret", secret);
-    store.set("server", srv);
-    store.set("deviceName", $("deviceName").value.trim().slice(0, 40) || guessName());
-    if (!store.get("deviceId", "")) store.set("deviceId", randId(12));
+    const changed = C.normalizeSecret(await KV.get("secret", "")) !== secret || (await I.server()) !== srv;
+    const patch = { secret, server: srv, deviceName: $("deviceName").value.trim().slice(0, 40) || guessName() };
+    if (!(await KV.get("deviceId", ""))) patch.deviceId = randId(12);
     if (changed) {
       const now = nowSec();
-      store.set("startTs", now);
-      store.set("since", String(now));
-      store.set("seen", []);
-      store.set("nonces", []);
-      store.set("history", []);
+      Object.assign(patch, { startTs: now, since: String(now), seen: [], nonces: [], history: [] });
     }
+    await KV.setMany(patch);
     incoming.secret = "";
     incoming.server = "";
     $("secret").value = "";
-    stopLive();
-    showApp();
+    // нажатие «Подключить» — подходящий момент сразу попросить разрешение на уведомления
+    if (pushSupported && Notification.permission === "default" && (!isIOS || isStandalone)) {
+      enablePush().catch(() => {});
+    } else if (pushSupported && Notification.permission === "granted") {
+      refreshPush();
+    }
+    await showApp();
     maybeSendShared();
   });
 
   $("cancelSetup").addEventListener("click", () => { $("secret").value = ""; showApp(); });
-  $("openSettings").addEventListener("click", () => { stopLive(); showSetup(true); });
+  $("openSettings").addEventListener("click", () => showSetup(true));
 
-  $("forget").addEventListener("click", () => {
-    if (!confirm("Удалить ключ и историю с этого устройства?")) return;
-    stopLive();
-    store.wipe();
+  $("forget").addEventListener("click", async () => {
+    if (!confirm("Удалить ключ, историю и отключить уведомления на этом устройстве?")) return;
+    const reg = await swReady;
+    if (reg) await TBPush.unregister(reg);
+    await KV.clear();
     incoming.secret = "";
-    showSetup(false);
+    await showSetup(false);
     setMsg($("setupMsg"), "Данные удалены.", "ok");
+  });
+
+  // ---------- уведомления ----------
+  async function renderPush() {
+    const card = $("pushCard");
+    const btn = $("pushBtn");
+    const text = $("pushText");
+    $("pushOk").hidden = true;
+    card.hidden = false;
+    btn.hidden = true;
+
+    if (isIOS && !isStandalone) {
+      text.textContent = "Чтобы вкладки с компьютера приходили уведомлениями, добавьте страницу на главный экран: " +
+        "кнопка «Поделиться» внизу Safari → «На экран „Домой“». Затем откройте Tab Bridge с главного экрана.";
+      return;
+    }
+    if (!pushSupported) {
+      text.textContent = "Этот браузер не поддерживает уведомления. Откройте страницу, чтобы увидеть присланные вкладки, " +
+        "или используйте Chrome либо Яндекс Браузер.";
+      return;
+    }
+    if (Notification.permission === "denied") {
+      text.textContent = "Уведомления запрещены. Разрешите их для этого сайта в настройках браузера " +
+        "(значок замка в адресной строке → Уведомления), затем обновите страницу.";
+      return;
+    }
+    const reg = await swReady;
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (Notification.permission === "granted" && sub && (await KV.get("pushAt", 0))) {
+      card.hidden = true;
+      $("pushOk").hidden = false;
+      return;
+    }
+    text.textContent = "Включите уведомления — тогда вкладка, отправленная с компьютера, сразу появится на телефоне, " +
+      "и её можно будет открыть одним нажатием.";
+    btn.hidden = false;
+  }
+
+  async function enablePush() {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { await renderPush(); return; }
+    const reg = await swReady;
+    if (!reg) throw new Error("Браузер не дал запустить фоновый обработчик.");
+    await TBPush.register(reg);
+    await renderPush();
+  }
+
+  // продлеваем подписку при каждом открытии (сервер удаляет давно не обновлявшиеся)
+  async function refreshPush() {
+    try {
+      const reg = await swReady;
+      if (reg && Notification.permission === "granted") await TBPush.register(reg);
+    } catch {}
+  }
+
+  $("pushBtn").addEventListener("click", async () => {
+    $("pushBtn").disabled = true;
+    setMsg($("pushMsg"), "Включаю…");
+    try {
+      await enablePush();
+      setMsg($("pushMsg"), "");
+    } catch (e) {
+      setMsg($("pushMsg"), String(e?.message || e), "err");
+    } finally {
+      $("pushBtn").disabled = false;
+    }
   });
 
   // ---------- отправка ----------
   async function sendLink(url, title) {
-    const group = await C.deriveGroup(store.get("secret", ""));
+    const group = await C.deriveGroup(await KV.get("secret", ""));
     const message = await C.sealLink(group, {
-      url, title, from: store.get("deviceName", guessName()), device: store.get("deviceId", "")
+      url, title, from: await KV.get("deviceName", guessName()), device: await KV.get("deviceId", "")
     });
-    const r = await fetch(server(), {
+    const r = await fetch(await I.server(), {
       ...FETCH_OPTS,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -168,14 +241,14 @@
   });
 
   let sharedHandled = false;
-  function maybeSendShared() {
-    if (sharedHandled || !sharedUrl || !store.get("secret", "")) return;
+  async function maybeSendShared() {
+    if (sharedHandled || !sharedUrl || !(await KV.get("secret", ""))) return;
     sharedHandled = true;
     $("url").value = sharedUrl;
     doSend(sharedUrl, sharedTitle);
   }
 
-  // ---------- получение ----------
+  // ---------- список полученных ----------
   function ago(sec) {
     const d = Math.max(0, nowSec() - sec);
     if (d < 60) return "только что";
@@ -184,8 +257,8 @@
     return new Date(sec * 1000).toLocaleDateString();
   }
 
-  function renderList() {
-    const items = store.get("history", []).filter((h) => C.isSafeUrl(h.url));
+  async function renderList() {
+    const items = (await KV.get("history", [])).filter((h) => C.isSafeUrl(h.url));
     const list = $("list");
     list.textContent = "";
     $("empty").hidden = items.length > 0;
@@ -208,60 +281,26 @@
     }
   }
 
-  $("clear").addEventListener("click", () => { store.set("history", []); renderList(); });
+  $("clear").addEventListener("click", async () => { await KV.set("history", []); renderList(); });
 
-  let chain = Promise.resolve();
-  function serial(fn) { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; }
-
-  async function processMessages(msgs) {
-    const secret = store.get("secret", "");
-    if (!secret) return 0;
-    const group = await C.deriveGroup(secret);
-    const startTs = store.get("startTs", nowSec());
-    const myId = store.get("deviceId", "");
-    const seen = new Set(store.get("seen", []));
-    const nonces = new Set(store.get("nonces", []));
-    const fresh = [];
-    for (const m of msgs) {
-      if (!m || m.event !== "message" || !m.id || seen.has(m.id)) continue;
-      seen.add(m.id);
-      if (typeof m.time !== "number" || m.time < startTs) continue;
-      const link = await C.openLink(group, m.message);
-      if (!link || nonces.has(link.nonce)) continue;
-      nonces.add(link.nonce);
-      if (Math.abs(link.ts - m.time) > C.MAX_CLOCK_SKEW) continue;
-      if (link.device === myId) continue;
-      fresh.push({ id: m.id, url: link.url, title: link.title, from: link.from, time: m.time });
-    }
-    store.set("seen", [...seen].slice(-MAX_SEEN));
-    store.set("nonces", [...nonces].slice(-MAX_SEEN));
-    if (fresh.length) {
-      store.set("history", [...fresh.reverse(), ...store.get("history", [])].slice(0, MAX_HISTORY));
-      renderList();
-      if (navigator.vibrate) try { navigator.vibrate(60); } catch {}
-    }
-    return fresh.length;
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "tb-updated") renderList();
+    });
   }
 
-  function poll() {
-    return serial(async () => {
-      const secret = store.get("secret", "");
-      if (!secret) return;
-      try {
-        const group = await C.deriveGroup(secret);
-        const since = store.get("since", String(nowSec()));
-        const r = await fetch(`${server()}/${group.topic}/json?poll=1&since=${encodeURIComponent(since)}`, FETCH_OPTS);
-        if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
-        const msgs = (await r.text()).split("\n").filter(Boolean)
-          .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-        await processMessages(msgs);
-        const last = msgs.filter((m) => m.event === "message" && m.id).at(-1);
-        if (last) store.set("since", last.id);
-        setMsg($("state"), "Проверено в " + new Date().toLocaleTimeString(), "muted small");
-      } catch (e) {
-        setMsg($("state"), "Нет связи с сервером: " + (e?.message || e), "err small");
+  // ---------- проверка, пока страница открыта ----------
+  async function poll() {
+    try {
+      const r = await I.poll();
+      if (r.fresh.length) {
+        renderList();
+        if (navigator.vibrate) try { navigator.vibrate(60); } catch {}
       }
-    });
+      setMsg($("state"), "Проверено в " + new Date().toLocaleTimeString(), "muted small");
+    } catch (e) {
+      setMsg($("state"), "Нет связи с сервером: " + (e?.message || e), "err small");
+    }
   }
 
   let ws = null;
@@ -269,20 +308,22 @@
   async function connectWs() {
     if (ws && ws.readyState <= 1) return;
     try {
-      const group = await C.deriveGroup(store.get("secret", ""));
-      const sock = new WebSocket(`${server().replace(/^http/i, "ws")}/${group.topic}/ws`);
+      const group = await C.deriveGroup(await KV.get("secret", ""));
+      const sock = new WebSocket(`${(await I.server()).replace(/^http/i, "ws")}/${group.topic}/ws`);
       ws = sock;
-      sock.onmessage = (e) => {
+      sock.onmessage = async (e) => {
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
-        if (m.event === "message") serial(() => processMessages([m]));
+        if (m.event !== "message") return;
+        const r = await I.process([m]);
+        if (r.fresh.length) renderList();
       };
       sock.onclose = sock.onerror = () => { if (ws === sock) ws = null; };
     } catch { ws = null; }
   }
 
-  function startLive() {
-    if (document.hidden || !store.get("secret", "")) return;
+  async function startLive() {
+    if (document.hidden || !(await KV.get("secret", ""))) return;
     poll();
     connectWs();
     clearInterval(timer);
@@ -298,16 +339,16 @@
 
   document.addEventListener("visibilitychange", () => {
     if ($("app").hidden) return;
-    if (document.hidden) stopLive(); else startLive();
+    if (document.hidden) stopLive();
+    else { startLive(); renderList(); }
   });
 
   // ---------- запуск ----------
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
-
-  if (incoming.secret || !store.get("secret", "")) {
-    showSetup(false);
+  if (incoming.secret || !(await KV.get("secret", ""))) {
+    await showSetup(false);
   } else {
-    showApp();
+    await showApp();
+    refreshPush();
     maybeSendShared();
   }
 })();

@@ -259,20 +259,53 @@ async function setupMenus() {
     await api.contextMenus.removeAll();
     api.contextMenus.create({ id: "tb-page", title: "Отправить вкладку на свои устройства", contexts: ["page"] });
     api.contextMenus.create({ id: "tb-link", title: "Отправить ссылку на свои устройства", contexts: ["link"] });
+    // правый клик по значку расширения
+    api.contextMenus.create({ id: "tb-inbox", title: "Полученные вкладки", contexts: ["action"] });
   } catch {}
 }
 
+function notifyError(e) {
+  try {
+    api.notifications?.create("tb-err", {
+      type: "basic",
+      iconUrl: api.runtime.getURL("icons/icon128.png"),
+      title: "Не удалось отправить вкладку",
+      message: String(e?.message || e)
+    });
+  } catch {}
+}
+
+// Один клик — одна отправка: повторные клики, пока идёт отправка, игнорируются.
+let sending = false;
+function sendWithFeedback(job) {
+  if (sending) return;
+  sending = true;
+  try { api.action.setBadgeBackgroundColor?.({ color: "#2563eb" }); api.action.setBadgeText({ text: "…" }); } catch {}
+  Promise.resolve()
+    .then(job)
+    .then(() => flashBadge(true), (e) => { flashBadge(false); notifyError(e); })
+    .finally(() => { sending = false; });
+}
+
+function openInbox() {
+  api.tabs.create({ url: api.runtime.getURL("popup.html?tab=1") }).catch(() => {});
+}
+
+// Главная кнопка: клик по значку сразу отправляет открытую страницу.
+api.action.onClicked.addListener((tab) => {
+  sendWithFeedback(() => sendActiveTab(tab));
+});
+
 api.contextMenus?.onClicked.addListener((info, tab) => {
-  const job = info.menuItemId === "tb-link"
-    ? sendLink(info.linkUrl, info.linkText || info.selectionText || info.linkUrl)
-    : info.menuItemId === "tb-page"
-      ? sendActiveTab(tab)
-      : null;
-  job?.then(() => flashBadge(true), () => flashBadge(false));
+  if (info.menuItemId === "tb-inbox") return openInbox();
+  if (info.menuItemId === "tb-link") {
+    return sendWithFeedback(() => sendLink(info.linkUrl, info.linkText || info.selectionText || info.linkUrl));
+  }
+  if (info.menuItemId === "tb-page") sendWithFeedback(() => sendActiveTab(tab));
 });
 
 api.commands?.onCommand.addListener((cmd, tab) => {
-  if (cmd === "send-current-tab") sendActiveTab(tab).then(() => flashBadge(true), () => flashBadge(false));
+  if (cmd === "send-current-tab") sendWithFeedback(() => sendActiveTab(tab));
 });
 
 api.notifications?.onClicked.addListener(async (nid) => {
@@ -299,6 +332,7 @@ async function handle(msg, sender) {
   switch (msg?.type) {
     case "send-active": return sendActiveTab();
     case "check": await connectLive(); return poll();
+    case "open-inbox": openInbox(); return {};
     case "clear-history":
       await serial(() => api.storage.local.set({ history: [] }));
       return {};

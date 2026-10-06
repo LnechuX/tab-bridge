@@ -94,3 +94,8 @@ li a {
 li:last-child a { border-bottom: 0; }
 li .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 li .m { display: block; color: var(--muted); font-size: 13px; }
+.push { border-color: var(--accent); }
+.push p { margin: 0 0 12px; }
+.push button { width: 100%; }
+.pushok { font-size: 13px; color: var(--ok); margin: -4px 0 12px 4px; }
+.push .msg:empty { display: none; }

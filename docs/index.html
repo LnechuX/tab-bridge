@@ -49,6 +49,14 @@
 
   <!-- Основной экран -->
   <section id="app" hidden>
+    <div class="card push" id="pushCard" hidden>
+      <h2>🔔 Уведомления о новых вкладках</h2>
+      <p class="muted" id="pushText"></p>
+      <button id="pushBtn" class="primary" hidden>Включить уведомления</button>
+      <div id="pushMsg" class="msg" role="status"></div>
+    </div>
+    <div class="pushok" id="pushOk" hidden>🔔 Уведомления включены — вкладки с компьютера придут сами</div>
+
     <div class="card">
       <h2>Отправить на компьютер</h2>
       <input id="url" type="url" inputmode="url" placeholder="Ссылка https://…" autocomplete="off">
@@ -65,12 +73,13 @@
         <button id="clear" class="link" hidden>Очистить</button>
       </div>
       <ul id="list"></ul>
-      <div id="empty" class="muted">Пока ничего не приходило. Страница проверяет новые вкладки, пока открыта.</div>
+      <div id="empty" class="muted">Пока ничего не приходило. Нажмите на значок Tab Bridge в браузере компьютера — вкладка появится здесь.</div>
       <div id="state" class="muted small"></div>
     </div>
   </section>
 </main>
 <script src="tb-crypto.js"></script>
+<script src="shared.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

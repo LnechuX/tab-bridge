@@ -48,7 +48,6 @@ async function render() {
     a.addEventListener("click", (e) => {
       e.preventDefault();
       api.tabs.create({ url: h.url, active: true });
-      window.close();
     });
     li.append(a);
     list.append(li);
@@ -61,15 +60,6 @@ async function render() {
     $("last").textContent = "Последняя проверка: " + new Date(s.lastPoll).toLocaleTimeString();
   }
 }
-
-$("send").addEventListener("click", async () => {
-  $("send").disabled = true;
-  status("Шифрую и отправляю…", "muted");
-  const r = await send({ type: "send-active" });
-  $("send").disabled = false;
-  if (r.ok) status("✓ Отправлено: " + (r.title || ""), "ok");
-  else status(r.error || "Не получилось отправить", "err");
-});
 
 $("check").addEventListener("click", async () => {
   $("check").disabled = true;
@@ -88,7 +78,6 @@ $("clear").addEventListener("click", async () => {
 
 $("settings").addEventListener("click", () => {
   api.runtime.openOptionsPage();
-  window.close();
 });
 
 api.storage.onChanged.addListener(render);

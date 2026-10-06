@@ -139,6 +139,10 @@ $("save").addEventListener("click", async () => {
   say($("msg"), "Сохранено ✓", "ok");
 });
 
+$("inbox").addEventListener("click", () => {
+  api.tabs.create({ url: api.runtime.getURL("popup.html?tab=1") });
+});
+
 // ---------- запуск ----------
 if (location.hash === "#welcome") {
   $("welcome").hidden = false;
