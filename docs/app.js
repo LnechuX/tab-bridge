@@ -989,8 +989,9 @@
     catch { setStatus(statusId, "Не удалось скопировать. Нажмите ещё раз.", ""); }
   }
   $("copyShortcut").addEventListener("click", () => copy(TB.quick.shortcutPrefix(false), "copyStatus", "✓ Скопировано"));
-  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true), "copyStatus", "✓ Скопирован адрес для iOS 16"));
+  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true), "copyStatus", "✓ Скопирован запасной адрес"));
   $("wiz2Next").addEventListener("click", () => goStep(3));
+  $("wiz2Skip").addEventListener("click", async () => { await KV.set("quickBannerHidden", true); closeQuick(); });
   $("wizDone").addEventListener("click", async () => {
     await KV.set("quickBannerHidden", true);
     closeQuick();

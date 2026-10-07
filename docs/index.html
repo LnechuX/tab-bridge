@@ -218,22 +218,24 @@
         <button id="addShortcut" class="primary hero-btn"><span class="hb-main">Добавить «На ПК»</span></button>
       </div>
       <div id="shortcutManual" hidden>
-        <p class="muted">Это делается один раз в приложении «Команды». Следуйте по пунктам:</p>
-        <button id="copyShortcut" class="primary wide">1. Скопировать адрес</button>
-        <div class="wiz-status" id="copyStatus" role="status"></div>
-        <button id="openShortcuts" class="wide mt">2. Открыть «Команды»</button>
-        <ol class="steps big-steps" start="3">
-          <li>Внизу нажмите поиск и найдите действие <span class="ios-row">Получить URL-адреса из ввода</span> — нажмите на него.</li>
-          <li>Снова поиск: <span class="ios-row">Кодировать URL</span> — нажмите.</li>
-          <li>Снова поиск: <span class="ios-row">Открыть URL-адреса</span> — нажмите. В его поле <b>вставьте</b> скопированный адрес и сразу за ним выберите <b>«Закодированный URL»</b> из строки над клавиатурой.</li>
-          <li>Нажмите <span class="ios-btn">ⓘ</span> внизу и включите <b>«Показывать в меню „Поделиться“»</b>.</li>
-          <li>Вверху нажмите на название и назовите команду <b>На ПК</b>. Нажмите «Готово».</li>
+        <p class="muted">Это делается один раз в приложении «Команды» — всего одно действие. Идите по пунктам сверху вниз.</p>
+        <ol class="steps big-steps recipe">
+          <li><button id="copyShortcut" class="primary wide">Скопировать адрес</button>
+            <span class="wiz-status" id="copyStatus" role="status"></span></li>
+          <li><button id="openShortcuts" class="wide">Открыть «Команды»</button>
+            <span class="muted small">Откроется новая пустая команда.</span></li>
+          <li>Внизу нажмите <span class="ios-btn" aria-label="Сведения">ⓘ</span> и включите <b>«Показывать в меню „Поделиться“»</b>. Нажмите «Готово».</li>
+          <li>Нажмите <b>«Добавить действие»</b> (или поиск внизу), введите <span class="ios-row">Открыть URL</span> и выберите <b>«Открыть URL-адреса»</b>.</li>
+          <li>Нажмите на синее слово <b>«URL»</b> в этом действии, подержите палец в поле → <b>«Вставить»</b>.</li>
+          <li>Не убирая клавиатуру, в строке над ней нажмите <b>«Входные данные команды»</b>. Получится: <span class="ios-row">x-safari-https://… #u=</span> <span class="ios-row">Входные данные команды</span></li>
+          <li>Вверху нажмите <b>«Новая команда»</b> → «Переименовать» → <b>На ПК</b>. Нажмите <b>«Готово»</b>.</li>
         </ol>
         <details>
-          <summary>У меня iOS 16</summary>
-          <p class="muted small">Скопируйте этот адрес вместо адреса из пункта 1. Браузером по умолчанию должен быть Safari.</p>
-          <button id="copyShortcut16" class="wide">Скопировать адрес для iOS 16</button>
+          <summary>Появляется ошибка или Safari не открывается</summary>
+          <p class="muted small">Скопируйте этот адрес и замените им адрес из пункта 1 в действии. Тогда ссылка откроется в браузере по умолчанию — им должен быть Safari.</p>
+          <button id="copyShortcut16" class="wide">Скопировать запасной адрес</button>
         </details>
+        <button id="wiz2Skip" class="link mt">Сложно? Пропустить — пользоваться кнопкой «Вставить и отправить»</button>
       </div>
       <button id="wiz2Next" class="wide mt">Готово, дальше</button>
     </div>

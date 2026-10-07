@@ -255,3 +255,5 @@ li.recv a.recv-row { display: flex; align-items: center; gap: 12px; }
 li.recv a.recv-row .grow { flex: 1; min-width: 0; }
 .mem { font-size: 15px; padding: 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); line-height: 1.5; }
 #forget { margin-top: 0; }
+.recipe li > button { margin: 2px 0 4px; }
+.recipe li > .wiz-status { display: block; min-height: 0; margin-top: 4px; text-align: left; }
