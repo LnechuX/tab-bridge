@@ -89,7 +89,10 @@
     $("senderCard").hidden = !sender;
     $("tabRecv").hidden = sender;
     if (sender) view = "sent";
-    $("quickBanner").hidden = !(isIOS && isStandalone && !(await KV.get("quickBannerHidden", false)));
+    $("quickBanner").hidden = !(isIOS && !(await KV.get("quickBannerHidden", false)));
+    $("quickBannerGo").textContent = (window.TB_PHONE || {}).shortcutUrl ? "Настроить за 1 минуту" : "Настроить";
+    $("androidHint").hidden = !TB.IS_ANDROID;
+    $("pasteHint").hidden = !isIOS;
     await render();
     if (sender) $("pushCard").hidden = true; else await renderPush();
     startLive();
@@ -133,9 +136,12 @@
 
   async function showInstall() {
     show("install");
-    $("installDone").hidden = !incoming.fromApp;
+    // пришли кнопкой «Подключить Safari» из приложения — приложение уже установлено
+    $("installCard").hidden = incoming.fromApp;
+    $("safariOkText").textContent = incoming.fromApp
+      ? "Вернитесь в приложение Tab Bridge — там следующий шаг. Кнопка «◀ Tab Bridge» вверху слева или значок на экране «Домой»."
+      : "Теперь из Safari можно отправлять ссылки на компьютер. Чтобы и получать — установите приложение:";
   }
-  $("installQuick").addEventListener("click", () => showQuick());
 
   $("saveSetup").addEventListener("click", () => connect(C.normalizeSecret($("secret").value), $("server").value));
   $("pairHere").addEventListener("click", () => showSetup());
@@ -290,9 +296,11 @@
     box.append(copy);
     $("sheet").hidden = false;
   }
-  function hideSheet() { $("sheet").hidden = true; }
-  $("sheetCancel").addEventListener("click", hideSheet);
-  $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) hideSheet(); });
+  let sheetCancelHook = null;
+  function hideSheet() { $("sheet").hidden = true; sheetCancelHook = null; }
+  function cancelSheet() { const h = sheetCancelHook; hideSheet(); if (h) h(); }
+  $("sheetCancel").addEventListener("click", cancelSheet);
+  $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) cancelSheet(); });
 
   // ---------- отрисовка ----------
   let view = "recv";
@@ -304,8 +312,17 @@
   async function render() {
     const i = await core.info();
     renderTargets(i);
+    renderClipTarget(i);
     renderList(i);
     renderDevices(i);
+  }
+
+  async function renderClipTarget(i) {
+    const ids = await quickIds(i);
+    const t = i.targets;
+    $("clipTarget").textContent = !t.length ? "" :
+      ids && ids.length === 1 ? `на «${(t.find((d) => d.id === ids[0]) || {}).name}»` :
+      ids ? "на все устройства" : "вы выберете, на какое устройство";
   }
 
   function renderTargets(i) {
@@ -413,6 +430,7 @@
 
   // ---------- отправка ----------
   let busy = false;
+  let doneTimer = null;
   async function doSend(ids, btn, presetUrl, presetTitle) {
     if (busy) return;
     const raw = presetUrl || $("url").value;
@@ -420,10 +438,15 @@
     if (!u) return setMsg($("sendMsg"), "Вставьте ссылку, начинающуюся с https:// или http://", "err");
     busy = true;
     if (btn) btn.disabled = true;
-    setMsg($("sendMsg"), "Шифрую и отправляю…");
+    $("sentDone").hidden = true;
+    setMsg($("sendMsg"), "Отправляю…");
     try {
       const e = await core.sendLink(u, presetTitle || "", ids);
-      setMsg($("sendMsg"), "✓ Отправлено на " + e.to.map((x) => `«${x.name}»`).join(", "), "ok");
+      setMsg($("sendMsg"), "");
+      $("sentDoneText").textContent = "Отправлено на " + e.to.filter((x) => x.s !== "failed").map((x) => `«${x.name}»`).join(", ");
+      $("sentDone").hidden = false;
+      clearTimeout(doneTimer);
+      doneTimer = setTimeout(() => { $("sentDone").hidden = true; }, 8000);
       $("url").value = "";
       view = "sent";
       render();
@@ -452,14 +475,38 @@
     return null;
   }
 
-  // Отправить ссылку быстро: сразу, если ясно куда; иначе подставить в поле и попросить выбрать.
+  // Спросить, куда отправить (нижнее меню со списком устройств). Возвращает ids или null.
+  function chooseTargets(i, u) {
+    return new Promise((resolve) => {
+      $("sheetTitle").textContent = "Куда отправить? " + hostOf(u);
+      const box = $("sheetActions");
+      box.textContent = "";
+      const pick = (ids) => { hideSheet(); resolve(ids); };
+      for (const d of i.targets) {
+        const b = el("button", "", `${icon(d.kind)}  ${d.name}`);
+        b.addEventListener("click", () => pick([d.id]));
+        box.append(b);
+      }
+      const all = el("button", "primary", `На все устройства (${i.targets.length})`);
+      all.addEventListener("click", () => pick([]));
+      box.append(all);
+      sheetCancelHook = () => resolve(null);
+      $("sheet").hidden = false;
+    });
+  }
+
+  // Отправить ссылку быстро: сразу, если ясно куда; иначе спросить.
   async function quickSend(u, title, after) {
     const i = await core.info();
-    $("url").value = u;
-    const ids = await quickIds(i);
-    if (ids) { await doSend(ids, null, u, title); if (after) after(); }
-    else if (i.targets.length) setMsg($("sendMsg"), "Выберите, куда отправить ссылку.");
-    else setMsg($("sendMsg"), "Компьютер ещё не появился в списке — подождите несколько секунд и нажмите «Отправить».", "err");
+    if (!i.targets.length) {
+      $("url").value = u;
+      $("manualSend").open = true;
+      return setMsg($("sendMsg"), "Компьютер ещё не появился в списке. Откройте на компьютере браузер и попробуйте через несколько секунд.", "err");
+    }
+    const ids = (await quickIds(i)) ?? (await chooseTargets(i, u));
+    if (!ids) return;
+    await doSend(ids, null, u, title);
+    if (after) after();
   }
 
   // «📋 Отправить скопированную ссылку»
@@ -468,9 +515,9 @@
     const p = navigator.clipboard?.readText ? navigator.clipboard.readText() : Promise.reject(new Error("нет доступа"));
     p.then((t) => {
       const u = C.extractUrl(t);
-      if (!u) return setMsg($("sendMsg"), "В буфере нет ссылки. Скопируйте ссылку (Поделиться → Скопировать) и нажмите ещё раз.", "err");
+      if (!u) return setMsg($("sendMsg"), "Сначала скопируйте ссылку: «Поделиться» → «Скопировать». Потом нажмите кнопку ещё раз.", "err");
       quickSend(u, "");
-    }, () => setMsg($("sendMsg"), "Нет доступа к буферу. Нажмите «Вставить», когда iPhone спросит, или вставьте ссылку вручную.", "err"));
+    }, () => setMsg($("sendMsg"), "Не удалось вставить. Когда iPhone спросит «Вставить?», нажмите «Вставить».", "err"));
   });
 
   // «Поделиться» на Android: после успешной отправки приложение пробует закрыться само
@@ -479,7 +526,7 @@
     const u = sharedUrl;
     sharedUrl = "";
     quickSend(u, sharedTitle, () => {
-      if (/Отправлено/.test($("sendMsg").textContent)) setTimeout(() => { try { window.close(); } catch {} }, 1200);
+      if (!$("sentDone").hidden) setTimeout(() => { try { window.close(); } catch {} }, 1200);
     });
   }
 
@@ -552,54 +599,113 @@
     await showSetup("Телефон отключён. Чтобы подключить снова — отсканируйте QR-код.");
   });
 
-  // ---------- экран «Быстрая отправка» ----------
+  // ---------- мастер «Быстрая отправка» ----------
+  const PHONE_CFG = window.TB_PHONE || {};
+  const shortcutUrl = /^https:\/\/www\.icloud\.com\/shortcuts\/[A-Za-z0-9]+/.test(PHONE_CFG.shortcutUrl || "") ? PHONE_CFG.shortcutUrl : "";
   let safariLink = "";
+  let safariTimer = null;
+
+  // Подключён ли уже Safari этого телефона (виден в группе как «только отправка»)
+  async function safariReady() {
+    const i = await core.info();
+    if (isIOS && !isStandalone && i.paired) return true;          // мы и есть Safari
+    return i.devices.some((d) => d.kind === "sender");
+  }
+
   async function showQuick() {
-    const wasPaired = await paired();
     show("quick");
-    const inSafari = isIOS && !isStandalone;
-    $("qSafari").hidden = !isIOS;
-    $("qBookmark").hidden = !isIOS;
-    $("qShortcut").hidden = !isIOS;
-    $("qAndroid").hidden = !TB.IS_ANDROID;
-    $("linkSafari").hidden = inSafari;
-    $("linkSafariNote").hidden = inSafari;
-    $("safariIsOk").hidden = !inSafari;
-    $("quickIntro").textContent = isIOS
-      ? "Два способа отправить открытую страницу на компьютер в 2 касания. Можно настроить оба — потом оставите удобный."
-      : TB.IS_ANDROID ? "На Android быстрее всего через «Поделиться»." : "Откройте эту страницу на телефоне.";
+    window.scrollTo(0, 0);
+    setMsg($("quickMsg"), "");
     $("bookmarkletCode").value = TB.quick.bookmarklet();
+    $("qBookmark").hidden = !isIOS;
+    $("shortcutOneTap").hidden = !shortcutUrl;
+    $("shortcutManual").hidden = Boolean(shortcutUrl);
+    if (!isIOS) {
+      for (const n of [1, 2, 3]) $("wiz" + n).hidden = true;
+      $("wizAndroid").hidden = false;
+      $("wizProgress").textContent = "";
+      return;
+    }
+    $("wizAndroid").hidden = true;
     // ссылка для Safari готовится заранее: переход должен случиться сразу по нажатию
     safariLink = "";
-    if (wasPaired && isStandalone) {
+    if (await paired()) {
       const secret = C.normalizeSecret(await KV.get("secret", ""));
       const srv = await TB.server();
       safariLink = "x-safari-" + TB.quick.sendPage().replace(/send\.html$/, "") +
         "#k=" + secret + (srv !== TB.DEFAULT_SERVER ? "&s=" + encodeURIComponent(srv) : "") + "&sender=1";
     }
-    setMsg($("quickMsg"), "");
+    goStep((await safariReady()) ? 2 : 1);
+  }
+
+  function goStep(n) {
+    for (const k of [1, 2, 3]) $("wiz" + k).hidden = k !== n;
+    $("wizProgress").textContent = `Шаг ${n} из 3`;
+    clearInterval(safariTimer);
+    safariTimer = null;
+    if (n === 1) {
+      setStatus("safariStatus", "", "");
+      $("wiz1Next").disabled = true;
+      // ждём, пока Safari подключится (проверяем каждые 3 секунды и при возврате в приложение)
+      safariTimer = setInterval(checkSafari, 3000);
+    }
     window.scrollTo(0, 0);
   }
-  $("closeQuick").addEventListener("click", async () => {
+
+  function setStatus(id, text, cls) { $(id).textContent = text; $(id).className = "wiz-status " + (cls || ""); }
+
+  let checking = false;
+  async function checkSafari() {
+    if (checking || $("wiz1").hidden) return;
+    checking = true;
+    try {
+      try { await core.poll(); } catch {}
+      if (await safariReady()) {
+        clearInterval(safariTimer); safariTimer = null;
+        setStatus("safariStatus", "✓ Safari подключён", "ok");
+        $("wiz1Next").disabled = false;
+        setTimeout(() => { if (!$("wiz1").hidden) goStep(2); }, 1200);
+      }
+    } finally { checking = false; }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !$("quick").hidden) checkSafari(); });
+
+  $("linkSafari").addEventListener("click", () => {
+    if (!safariLink) return setStatus("safariStatus", "Сначала подключите это приложение по QR-коду.", "");
+    setStatus("safariStatus", "Жду, когда Safari подключится…", "wait");
+    location.href = safariLink;
+  });
+  $("wiz1Next").addEventListener("click", () => goStep(2));
+
+  $("addShortcut").addEventListener("click", () => { if (shortcutUrl) location.href = shortcutUrl; });
+  $("openShortcuts").addEventListener("click", () => { location.href = "shortcuts://create-shortcut"; });
+  async function copy(text, statusId, okText) {
+    try { await navigator.clipboard.writeText(text); setStatus(statusId, okText, "ok"); }
+    catch { setStatus(statusId, "Не удалось скопировать. Нажмите ещё раз.", ""); }
+  }
+  $("copyShortcut").addEventListener("click", () => copy(TB.quick.shortcutPrefix(false), "copyStatus", "✓ Скопировано"));
+  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true), "copyStatus", "✓ Скопирован адрес для iOS 16"));
+  $("wiz2Next").addEventListener("click", () => goStep(3));
+  $("wizDone").addEventListener("click", async () => {
+    await KV.set("quickBannerHidden", true);
+    closeQuick();
+  });
+  $("wizAndroidDone").addEventListener("click", () => closeQuick());
+  $("copyBookmarklet").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(TB.quick.bookmarklet()); setMsg($("quickMsg"), "✓ Код кнопки скопирован", "ok"); }
+    catch { setMsg($("quickMsg"), "Не удалось скопировать — скопируйте код из поля вручную.", "err"); }
+  });
+
+  async function closeQuick() {
+    clearInterval(safariTimer); safariTimer = null;
     if (lastScreen === "settings") $("openSettings").click();
     else if (lastScreen === "install") showInstall();
     else if (await paired()) showApp();
     else showSetup();
-  });
-  $("linkSafari").addEventListener("click", () => {
-    if (safariLink) location.href = safariLink;
-    else setMsg($("quickMsg"), "Сначала подключите это приложение по QR-коду.", "err");
-  });
-  async function copy(text, okText) {
-    try { await navigator.clipboard.writeText(text); setMsg($("quickMsg"), okText, "ok"); }
-    catch { setMsg($("quickMsg"), "Не удалось скопировать — скопируйте вручную.", "err"); }
   }
-  $("copyBookmarklet").addEventListener("click", () => copy(TB.quick.bookmarklet(), "✓ Код кнопки скопирован. Теперь шаги ниже — в Safari."));
-  $("copyShortcut").addEventListener("click", () => copy(TB.quick.shortcutPrefix(false), "✓ Адрес скопирован. Теперь шаги ниже — в приложении «Команды»."));
-  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true), "✓ Адрес для iOS 16 скопирован."));
+  $("closeQuick").addEventListener("click", closeQuick);
   $("quickBannerGo").addEventListener("click", () => showQuick());
   $("quickBannerHide").addEventListener("click", () => { $("quickBanner").hidden = true; KV.set("quickBannerHidden", true); });
-  $("senderQuick").addEventListener("click", () => showQuick());
 
   // ---------- обновление, пока открыто ----------
   async function onResult(r) {
