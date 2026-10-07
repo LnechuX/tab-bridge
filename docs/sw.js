@@ -4,7 +4,7 @@
 // 2) Позволяет установить страницу на главный экран и попасть в меню «Поделиться».
 importScripts("tb-crypto.js", "tb-core.js", "blobstore.js", "shared.js");
 
-const CACHE = "tab-bridge-v8";
+const CACHE = "tab-bridge-v9";
 const ICON = "icons/icon-192.png";
 
 self.addEventListener("install", () => self.skipWaiting());
