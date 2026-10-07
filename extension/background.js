@@ -37,7 +37,7 @@ let initPromise = null;
 function init() {
   initPromise ??= (async () => {
     const s = await api.storage.local.get(["secret", "deviceId", "deviceName", "server"]);
-    if (!s.secret || C.checkSecret(s.secret)) {
+    if (!s.secret || C.checkSecret(s.secret, { loose: true })) {
       await core.pair(C.generateSecret(), DEFAULT_SERVER, s.deviceName || guessDeviceName());
     } else if (!s.deviceId) {
       // версия 2.x: ключ был, устройства — нет. Сохраняем ключ, телефон переподключать не нужно.
@@ -370,7 +370,9 @@ async function handle(msg, sender) {
       if (bad) throw new Error(bad);
       await core.leave();
       const { deviceName } = await api.storage.local.get("deviceName");
-      await core.pair(msg.secret, msg.server || DEFAULT_SERVER, deviceName || guessDeviceName());
+      const srv = String(msg.server || DEFAULT_SERVER).trim().replace(/\/+$/, "");
+      if (!/^https:\/\/[^/\s]+(\/\S*)?$/i.test(srv)) throw new Error("Сервер должен быть на https://");
+      await core.pair(msg.secret, srv, deviceName || guessDeviceName());
       await setupMenus();
       reconnect();
       return {};

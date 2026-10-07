@@ -53,10 +53,19 @@
   }
 
   // Возвращает текст ошибки или "" если секрет годится.
-  function checkSecret(s) {
+  // Принимаем только ключи, созданные Tab Bridge (26 символов из ALPHABET, 130 бит):
+  // придуманный человеком ключ можно подобрать по имени темы на сервере.
+  // loose — только чтобы не пересоздавать ключ, сохранённый старыми версиями.
+  function checkSecret(s, opts = {}) {
     const n = normalizeSecret(s);
-    if (n.length < MIN_SECRET_LEN) return `Ключ слишком короткий: нужно не меньше ${MIN_SECRET_LEN} букв и цифр.`;
-    if (new Set(n).size < 8) return "Ключ слишком простой. Нажмите «Новый», чтобы создать случайный.";
+    if (opts.loose) {
+      if (n.length < MIN_SECRET_LEN) return "Ключ слишком короткий.";
+      if (new Set(n).size < 8) return "Ключ слишком простой.";
+      return "";
+    }
+    if (n.length !== SECRET_LEN || [...n].some((c) => !ALPHABET.includes(c))) {
+      return "Ключ не подходит. Скопируйте его полностью из настроек Tab Bridge на компьютере (26 букв и цифр).";
+    }
     return "";
   }
 

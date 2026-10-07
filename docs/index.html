@@ -25,6 +25,18 @@
     <button id="openSettings" class="ghost" hidden>Настройки</button>
   </header>
 
+  <!-- Подтверждение подключения по ссылке/QR-коду (ссылку мог прислать и посторонний) -->
+  <section id="confirm" hidden>
+    <div class="card">
+      <h2>Подключить к вашему компьютеру?</h2>
+      <p class="mem" id="cpDevices">Проверяю, что это за устройства…</p>
+      <p class="warn small" id="cpWarn" hidden>Сейчас Tab Bridge здесь подключён к другим устройствам — от них он отключится.</p>
+      <p class="muted small">Подключайте, только если вы <b>сами</b> отсканировали QR-код в настройках Tab Bridge на своём компьютере. Если ссылку прислал кто-то другой — нажмите «Отмена».</p>
+      <button id="cpYes" class="primary wide">Подключить</button>
+      <button id="cpNo" class="wide mt6">Отмена</button>
+    </div>
+  </section>
+
   <!-- iPhone в Safari после QR-кода: Safari подключён для отправки; получать — через экран «Домой» -->
   <section id="install" hidden>
     <div class="card ok-card" id="safariOk">

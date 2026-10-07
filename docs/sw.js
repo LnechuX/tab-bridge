@@ -4,7 +4,7 @@
 // 2) Позволяет установить страницу на главный экран и попасть в меню «Поделиться».
 importScripts("tb-crypto.js", "tb-core.js", "blobstore.js", "shared.js");
 
-const CACHE = "tab-bridge-v11";
+const CACHE = "tab-bridge-v12";
 const ICON = "icons/icon-192.png";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -43,9 +43,9 @@ self.addEventListener("fetch", (e) => {
   }
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
   const clean = url.origin + url.pathname;
-  const netReq = url.search
-    ? new Request(clean, { credentials: "omit", cache: "no-store", redirect: "follow" })
-    : e.request;
+  // На GitHub уходит только сам адрес файла: без «?…», без cookie и без Referer
+  // (иначе GitHub узнал бы, с какого сайта вы нажали «На ПК»).
+  const netReq = new Request(clean, { credentials: "omit", cache: "no-cache", redirect: "follow", referrer: "", referrerPolicy: "no-referrer" });
   e.respondWith(
     fetch(netReq)
       .then((r) => {

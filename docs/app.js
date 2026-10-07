@@ -65,9 +65,31 @@
   let lastScreen = "app";
   function show(id) {
     if (id !== "quick") lastScreen = id;
-    for (const s of ["install", "setup", "app", "settings", "quick"]) $(s).hidden = s !== id;
+    for (const s of ["install", "setup", "app", "settings", "quick", "confirm"]) $(s).hidden = s !== id;
     $("openSettings").hidden = id !== "app";
     if (id !== "app") stopLive();
+  }
+
+  // Кто уже есть в группе с этим ключом — чтобы человек видел, к чему подключается
+  async function groupText(secret, server) {
+    try {
+      const list = await core.peek(secret, server);
+      if (!list.length) return "Устройств с этим ключом пока не видно — компьютер появится после подключения.";
+      return "Устройства: " + list.map((d) => `${icon(d.kind)} «${d.name}»`).join(", ");
+    } catch { return ""; }
+  }
+
+  // Подтверждение перед подключением. true — человек нажал «Подключить».
+  async function confirmPair(secret, server) {
+    show("confirm");
+    const cur = await paired() ? C.normalizeSecret(await KV.get("secret", "")) : "";
+    $("cpWarn").hidden = !cur || cur === C.normalizeSecret(secret);
+    $("cpDevices").textContent = "Проверяю, что это за устройства…";
+    groupText(secret, server).then((t) => { $("cpDevices").textContent = t || "Не удалось проверить устройства — нет связи с сервером."; });
+    return new Promise((resolve) => {
+      $("cpYes").onclick = () => resolve(true);
+      $("cpNo").onclick = () => resolve(false);
+    });
   }
 
   async function showSetup(note) {
@@ -78,8 +100,16 @@
     $("manual").open = Boolean(incoming.secret);
     setMsg($("setupMsg"), note || "", note ? "ok" : "muted");
     $("setupHint").textContent = incoming.secret
-      ? "Ключ получен из QR-кода — нажмите «Подключить»."
+      ? "Ключ получен из QR-кода — нажмите «Подключить». Подключайте, только если сами отсканировали код на своём компьютере."
       : "Откройте на компьютере настройки Tab Bridge, нажмите «Показать QR-код» и отсканируйте его.";
+    if (incoming.secret) {
+      const keep = incoming.secret;
+      const extra = (await paired()) && C.normalizeSecret(await KV.get("secret", "")) !== C.normalizeSecret(keep)
+        ? " Сейчас телефон подключён к другим устройствам — от них он отключится." : "";
+      groupText(keep, incoming.server).then((t) => {
+        if (t && incoming.secret === keep) $("setupHint").textContent = t + ". Подключайте, только если сами отсканировали код на своём компьютере." + extra;
+      });
+    }
   }
 
   async function showApp() {
@@ -127,6 +157,7 @@
     const s = C.normalizeSecret(secret);
     if (C.checkSecret(s)) return false;
     const srv = TB.cleanUrl(server) || TB.DEFAULT_SERVER;
+    if (!/^https:\/\/[^/\s]+/i.test(srv)) return false;
     const same = (await paired()) && C.normalizeSecret(await KV.get("secret", "")) === s && (await TB.server()) === srv;
     if (!same) {
       if (await paired()) await TB.wipe(null, true);
@@ -539,7 +570,7 @@
       if (!isMe) {
         const b = el("button", "", "Удалить");
         b.addEventListener("click", async () => {
-          if (!confirm(`Удалить «${d.name}»? На него больше нельзя будет отправлять, а само устройство отключится, как только выйдет в сеть.`)) return;
+          if (!confirm(`Удалить «${d.name}»? На него больше нельзя будет отправлять, а само устройство отключится, как только выйдет в сеть.\n\nЕсли устройство потеряно или им пользуется посторонний — дополнительно смените ключ: на компьютере Tab Bridge → «Устройства и настройки» → «Дополнительно» → «Сменить ключ».`)) return;
           b.disabled = true;
           try { await core.removeDevice(d.id); } catch (e) { alert(String(e?.message || e)); }
           render();
@@ -627,6 +658,16 @@
     });
   }
 
+  // Всегда спросить (даже если устройство одно) — для того, что пришло извне. null — отмена / некуда.
+  async function confirmTargets(what) {
+    const i = await core.info();
+    if (!i.targets.length) {
+      setMsg($("sendMsg"), "Компьютер ещё не появился в списке. Откройте на компьютере браузер и попробуйте через несколько секунд.", "err");
+      return null;
+    }
+    return chooseTargets(i, what);
+  }
+
   // Определить получателей: сразу или спросить. null — отмена / некуда.
   async function pickTargets(what) {
     const i = await core.info();
@@ -656,9 +697,10 @@
     catch { setMsg($("sendMsg"), "Браузер не дал доступ к буферу — вставьте ссылку вручную.", "err"); }
   });
 
-  async function quickSend(u, title, after) {
+  // confirm — ссылка пришла извне (другое приложение или сайт): всегда спрашиваем, куда и отправлять ли
+  async function quickSend(u, title, after, confirm) {
     if (TB.isOwnUrl(u)) return setMsg($("sendMsg"), OWN_URL_MSG, "err");
-    const ids = await pickTargets(hostOf(u));
+    const ids = confirm ? await confirmTargets(hostOf(u)) : await pickTargets(hostOf(u));
     if (!ids) { $("url").value = u; $("manualSend").open = true; return; }
     const ok = await doSend(ids, null, u, title);
     if (ok && after) after();
@@ -809,7 +851,7 @@
     if (sharedUrl) {
       const u = sharedUrl;
       sharedUrl = "";
-      return quickSend(u, sharedTitle, closeSoon);
+      return quickSend(u, sharedTitle, closeSoon, true);
     }
     if (!wantShared) return;
     wantShared = false;
@@ -826,13 +868,16 @@
     if (files.length) {
       setPane("photo");
       addPhotos(files);
-      // получатель известен — отправляем сразу, как и ссылки; иначе пользователь выберет
-      if ((await quickIds(await core.info())) && await sendPhotos()) closeSoon();
+      // пришло извне — отправляем только по нажатию (чужой сайт не сможет отправить что-то за вас)
+      setMsg($("sendMsg"), "Проверьте и нажмите «Отправить картинку».");
       return;
     }
     const u = C.extractUrl([p.url, p.text, p.title].filter(Boolean).join(" "));
-    if (u) return quickSend(u, p.title || "", closeSoon);
-    if (String(p.text || "").trim()) { setPane("text"); $("textInput").value = p.text; return sendTextNow(p.text, closeSoon); }
+    if (u) return quickSend(u, p.title || "", closeSoon, true);
+    if (String(p.text || "").trim()) {
+      setPane("text"); $("textInput").value = p.text;
+      setMsg($("sendMsg"), "Проверьте текст и нажмите «Отправить текст».");
+    }
   }
 
   // Ссылка, которую пытались отправить из ещё не подключённого браузера (send.html)
@@ -844,7 +889,10 @@
     const i = await core.info();
     if (!i.targets.length && pendingTries++ < 6) { setTimeout(async () => { await poll(); flushPendingSend(); }, 2500); return; }
     await KV.set("pendingSend", null);
-    if (p.u) quickSend(p.u, p.t || ""); else sendTextNow(p.x);
+    if (p.ok) { if (p.u) quickSend(p.u, p.t || ""); else sendTextNow(p.x); return; }
+    // открыто не вашей кнопкой «На ПК» — отправляем только после подтверждения
+    if (p.u) quickSend(p.u, p.t || "", null, true);
+    else { setPane("text"); $("textInput").value = p.x; setMsg($("sendMsg"), "Проверьте текст и нажмите «Отправить текст»."); }
   }
 
   // ---------- настройки ----------
@@ -952,7 +1000,7 @@
     show("quick");
     window.scrollTo(0, 0);
     setMsg($("quickMsg"), "");
-    $("bookmarkletCode").value = TB.quick.bookmarklet();
+    $("bookmarkletCode").value = TB.quick.bookmarklet(await TB.sendToken());
     $("qBookmark").hidden = !isIOS;
     $("shortcutOneTap").hidden = !shortcutUrl;
     $("shortcutManual").hidden = Boolean(shortcutUrl);
@@ -1019,8 +1067,11 @@
     try { await navigator.clipboard.writeText(text); setStatus(statusId, okText, "ok"); }
     catch { setStatus(statusId, "Не удалось скопировать. Нажмите ещё раз.", ""); }
   }
-  $("copyShortcut").addEventListener("click", () => copy(TB.quick.shortcutPrefix(false), "copyStatus", "✓ Скопировано"));
-  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true), "copyStatus", "✓ Скопирован запасной адрес"));
+  // адрес готовим заранее: буфер обмена на iPhone доступен только сразу по нажатию
+  let tokenCache = "";
+  TB.sendToken().then((t) => { tokenCache = t; }).catch(() => {});
+  $("copyShortcut").addEventListener("click", () => copy(TB.quick.shortcutPrefix(false, tokenCache), "copyStatus", "✓ Скопировано"));
+  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true, tokenCache), "copyStatus", "✓ Скопирован запасной адрес"));
   $("wiz2Next").addEventListener("click", () => goStep(3));
   $("wiz2Skip").addEventListener("click", async () => { await KV.set("quickBannerHidden", true); closeQuick(); });
   $("wizDone").addEventListener("click", async () => {
@@ -1029,7 +1080,7 @@
   });
   $("wizAndroidDone").addEventListener("click", () => closeQuick());
   $("copyBookmarklet").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(TB.quick.bookmarklet()); setMsg($("quickMsg"), "✓ Код кнопки скопирован", "ok"); }
+    try { await navigator.clipboard.writeText(TB.quick.bookmarklet(tokenCache)); setMsg($("quickMsg"), "✓ Код кнопки скопирован", "ok"); }
     catch { setMsg($("quickMsg"), "Не удалось скопировать — скопируйте код из поля вручную.", "err"); }
   });
 
@@ -1117,8 +1168,15 @@
 
   // ---------- запуск ----------
   if (incoming.secret && isIOS && !isStandalone) {
-    // Safari на iPhone открыли по QR-коду или кнопкой из приложения
-    if (await pairSafariSender(incoming.secret, incoming.server)) {
+    // Safari на iPhone открыли по QR-коду или кнопкой из приложения.
+    // Уже подключён к этому же ключу — ничего не спрашиваем; иначе — подтверждение.
+    const same = (await paired()) && C.normalizeSecret(await KV.get("secret", "")) === C.normalizeSecret(incoming.secret);
+    const yes = C.checkSecret(incoming.secret) ? false : same || await confirmPair(incoming.secret, incoming.server);
+    if (!yes) {
+      incoming.secret = ""; incoming.server = "";
+      if (await paired()) { if ((await core.info()).me.kind === "sender") await showInstall(); else await showApp(); }
+      else await showSetup();
+    } else if (await pairSafariSender(incoming.secret, incoming.server)) {
       incoming.secret = ""; incoming.server = "";
       await showInstall();
       setTimeout(async () => { try { await core.poll(); } catch {} flushPendingSend(); }, 2500);

@@ -68,9 +68,13 @@
 
   // ---------- браузер ещё не подключён ----------
   const paired = Boolean(await KV.get("secret", "")) && Boolean(await KV.get("deviceId", ""));
+  // Сразу (без вопроса) отправляем, только если страницу открыла ваша кнопка «На ПК» с личным кодом.
+  // Иначе это мог сделать любой сайт — тогда показываем, что и куда, и ждём нажатия.
+  const myToken = await KV.get("sendToken", "");
+  const trusted = Boolean(req.tk) && req.tk === myToken;
   if (!paired) {
     // запомним ссылку — она уйдёт сама сразу после подключения
-    await KV.set("pendingSend", { u: req.url, x: req.text, t: req.title, ts: Date.now() });
+    await KV.set("pendingSend", { u: req.url, x: req.text, t: req.title, ts: Date.now(), ok: trusted });
     view("info", "Этот браузер ещё не подключён",
       TB.IS_IOS
         ? "Наведите камеру iPhone на QR-код в настройках Tab Bridge на компьютере и откройте ссылку в Safari — " +
@@ -130,24 +134,33 @@
       copyButton();
       return;
     }
-    if (targets.length === 1) return send([targets[0].id]);
-
-    const qt = await KV.get("quickTarget", "ask");
-    if (qt === "all") return send([]);
-    if (targets.some((d) => d.id === qt)) return send([qt]);
-
-    // несколько устройств — спрашиваем куда
-    view("ask", "Куда отправить?");
-    for (const d of targets) {
-      const b = el("button", "");
-      b.append(el("span", "ic", icon(d.kind)), el("span", "nm", d.name));
-      b.addEventListener("click", () => send([d.id]));
-      $("targets").append(b);
+    if (trusted) {
+      if (targets.length === 1) return send([targets[0].id]);
+      const qt = await KV.get("quickTarget", "ask");
+      if (qt === "all") return send([]);
+      if (targets.some((d) => d.id === qt)) return send([qt]);
     }
-    const all = el("button", "primary all", `На все устройства (${targets.length})`);
-    all.addEventListener("click", () => send([]));
-    $("targets").append(all);
-    $("rememberRow").hidden = false;
+
+    // несколько устройств или страницу открыли не вашей кнопкой — спрашиваем
+    if (trusted) view("ask", "Куда отправить?");
+    else view("ask", "Отправить на компьютер?", "Проверьте, что это вы отправляете эту ссылку.");
+    if (targets.length === 1) {
+      const b = el("button", "primary all");
+      b.append(el("span", "ic", icon(targets[0].kind)), el("span", "nm", `Отправить на «${targets[0].name}»`));
+      b.addEventListener("click", () => send([targets[0].id]));
+      $("targets").append(b);
+    } else {
+      for (const d of targets) {
+        const b = el("button", "");
+        b.append(el("span", "ic", icon(d.kind)), el("span", "nm", d.name));
+        b.addEventListener("click", () => send([d.id]));
+        $("targets").append(b);
+      }
+      const all = el("button", "primary all", `На все устройства (${targets.length})`);
+      all.addEventListener("click", () => send([]));
+      $("targets").append(all);
+    }
+    $("rememberRow").hidden = !trusted || targets.length < 2;
     if (cameFromPage) action("Отмена", goBack);
   }
 

@@ -108,7 +108,7 @@
   async function wipe(reg, tellOthers) {
     if (tellOthers) { try { await core.leave(); } catch {} }
     if (reg) await unregister(reg);
-    const keep = { openIn: await KV.get("openIn"), deviceName: await KV.get("deviceName") };  // настройки телефона не теряем
+    const keep = { openIn: await KV.get("openIn"), deviceName: await KV.get("deviceName"), sendToken: await KV.get("sendToken") };  // настройки телефона не теряем
     await KV.clear();
     if (g.TBBlobs) await g.TBBlobs.clear().catch(() => {});                                  // и полученные файлы
     for (const [k, v] of Object.entries(keep)) if (v !== undefined) await KV.set(k, v);
@@ -163,11 +163,16 @@
   const quick = {
     sendPage: () => appBase() + "send.html",
     // Код закладки: берёт адрес и заголовок открытой страницы и переходит на send.html.
-    bookmarklet: () =>
-      "javascript:(function(){location.href=" + JSON.stringify(appBase() + "send.html#r=back&t=").replace(/"/g, "'") +
-      "+encodeURIComponent(document.title.slice(0,200))+'&u='+encodeURIComponent(location.href)})()",
+    // Переход — по ссылке с rel=noreferrer: так GitHub не узнает, с какого сайта вы отправляете.
+    // tk — личный код этого устройства: страница отправки отправляет сразу только с ним
+    // (чужой сайт, открыв send.html, сможет лишь предложить отправку — вы подтвердите сами).
+    bookmarklet: (tk) =>
+      "javascript:(function(){var a=document.createElement('a');a.rel='noreferrer';a.href=" +
+      JSON.stringify(appBase() + "send.html#r=back&tk=" + (tk || "") + "&t=").replace(/"/g, "'") +
+      "+encodeURIComponent(document.title.slice(0,200))+'&u='+encodeURIComponent(location.href);" +
+      "document.body.appendChild(a);a.click();})()",
     // Начало адреса для Быстрой команды (дальше команда подставляет закодированную ссылку).
-    shortcutPrefix: (ios16) => (ios16 ? "" : "x-safari-") + appBase() + "send.html#u=",
+    shortcutPrefix: (ios16, tk) => (ios16 ? "" : "x-safari-") + appBase() + "send.html#" + (tk ? "tk=" + tk + "&" : "") + "u=",
     // Разобрать фрагмент send.html: { url, title, back }
     parse(hash) {
       const h = String(hash || "").replace(/^#/, "");
@@ -181,13 +186,20 @@
       let text = url ? "" : String(raw || "").trim().slice(0, 200000);
       if (isOwnUrl(url)) { url = ""; text = ""; }
       // empty: адрес вида «send.html#u=» без ссылки — команда «На ПК» ничего не передала
-      return { url, text, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back", empty: at >= 0 && !url && !text };
+      return { url, text, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back", tk: String(p.get("tk") || ""), empty: at >= 0 && !url && !text };
     }
   };
+
+  // Личный код быстрой отправки этого устройства (вшит в кнопку «На ПК» и Быструю команду)
+  async function sendToken() {
+    let t = await KV.get("sendToken", "");
+    if (!/^[a-z0-9]{16}$/.test(t)) { t = g.TBCore.randId(16); await KV.set("sendToken", t); }
+    return t;
+  }
 
   g.KV = KV;
   g.TB = {
     core, push: { register, unregister }, wipe, server, DEFAULT_SERVER, cleanUrl,
-    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick, VERSION, isOwnUrl
+    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick, VERSION, isOwnUrl, sendToken
   };
 })(self);

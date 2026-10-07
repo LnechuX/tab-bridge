@@ -13,6 +13,8 @@
   const C = g.TBCrypto;
   const HELLO_EVERY = 6 * 3600;   // устройства напоминают о себе раз в 6 часов
   const MAX_SEEN = 500;
+  const MAX_NONCES = 3000;
+  const REPLAY_WINDOW = 13 * 3600; // сервер хранит сообщения 12 часов: всё старше — повтор, отбрасываем
   const MAX_HISTORY = 50;
   const MAX_SENT = 50;
   const RANK = { failed: -1, sent: 0, delivered: 1, opened: 2 };
@@ -29,12 +31,18 @@
   // (никогда не открываем присланный HTML/SVG/скрипт как страницу).
   const SAFE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/heic", "image/heif", "text/plain"];
   const safeMime = (m) => { const t = String(m || "").split(";")[0].trim().toLowerCase(); return SAFE_MIME.includes(t) ? t : "application/octet-stream"; };
-  const safeName = (n) => String(n || "файл").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 120) || "файл";
+  // убираем и «невидимые» символы направления текста (photo\u202Egnp.exe выглядело бы как картинка)
+  const safeName = (n) => String(n || "файл").replace(/[\\/:*?"<>|\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "_").trim().slice(0, 120) || "файл";
   const preview = (x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, 120);
   const TEXT_INLINE = 1800;      // короче — уходит прямо в сообщении, длиннее — зашифрованным файлом
   const MAX_TEXT = 200000;
   const KEEP_INLINE_TEXT = 5000;  // длиннее — текст лежит только в хранилище файлов, в списке — начало
   const PAYLOAD_TTL = 3 * 3600;   // столько сервер хранит файлы; после — повторить отправку файла нельзя
+  // ntfy.sh принимает вложения до 2 МБ (и до 20 МБ на одно подключение за 3 часа).
+  // Большой зашифрованный файл уходит частями, получатель собирает их обратно.
+  const PART = 1900000;
+  const MAX_PARTS = 8;
+  const RES_CAP = PART + 1024;    // больше одной части с сервера не скачиваем (защита от «бесконечного» ответа)
 
   // maxBytes — сколько места на этом устройстве могут занимать полученные файлы
   function create({ kv, kind, defaultServer = "https://ntfy.sh", blobs = null, maxBytes = 300 * 1024 * 1024, version = "" }) {
@@ -235,20 +243,31 @@
       const { data, key } = await C.sealFile(bytes);
       const t = await topicsOf(s);
       const filesTopic = await C.topicFor(t.group, "files");
-      let r;
-      try { r = await upload(`${serverOf(s)}/${filesTopic}`, data, opts.onProgress); }
-      catch (e) { throw netError(e); }
-      if (!r.ok) {
-        throw new Error(r.status === 413 ? "Файл слишком большой для сервера." :
-          r.status === 429 ? "Сервер временно ограничил отправку файлов — попробуйте через несколько минут." :
-          `Сервер не принял файл (ошибка ${r.status}).`);
+      const count = Math.ceil(data.length / PART);
+      if (count > MAX_PARTS) throw new Error("Файл слишком большой — такой не отправить.");
+      const urls = [];
+      let exp = 0;
+      for (let p = 0; p < count; p++) {
+        const part = data.subarray(p * PART, Math.min(data.length, (p + 1) * PART));
+        const prog = opts.onProgress ? (x) => opts.onProgress((p * PART + x * part.length) / data.length) : null;
+        let r;
+        try { r = await upload(`${serverOf(s)}/${filesTopic}`, part, prog); }
+        catch (e) { throw netError(e); }
+        if (!r.ok) {
+          throw new Error(r.status === 413 ? "Сервер не принял файл: он слишком большой или исчерпан лимит сервера (20 МБ файлов за 3 часа). Попробуйте позже или отправьте файл поменьше." :
+            r.status === 429 ? "Сервер временно ограничил отправку — попробуйте через несколько минут." :
+            `Сервер не принял файл (ошибка ${r.status}).`);
+        }
+        const att = ((await r.json().catch(() => ({}))) || {}).attachment;
+        if (!att || !isOurFile(s, att.url)) throw new Error("Сервер не принял файл.");
+        urls.push(att.url);
+        exp = exp ? Math.min(exp, Number(att.expires) || 0) : Number(att.expires) || 0;
       }
-      const att = ((await r.json().catch(() => ({}))) || {}).attachment;
-      if (!att || !isOurFile(s, att.url)) throw new Error("Сервер не принял файл.");
       const mime = safeMime(blob.type);
       const n = safeName(name);
       return sendPayload(
-        { k: "file", n, m: mime, z: bytes.length, a: att.url, key, e: Number(att.expires) || 0, tx: opts.asText ? 1 : 0 },
+        // одна часть — адрес строкой (как в прежних версиях), несколько — списком
+        { k: "file", n, m: mime, z: bytes.length, a: urls.length === 1 ? urls[0] : urls, key, e: exp, tx: opts.asText ? 1 : 0 },
         { kind: opts.asText ? "text" : "file", title: opts.asText ? (opts.preview || "Текст") : n, name: n, mime, size: bytes.length },
         toIds
       );
@@ -272,7 +291,31 @@
       });
     }
 
-    const isOurFile = (s, url) => typeof url === "string" && url.startsWith(serverOf(s) + "/file/") && url.length < 300;
+    const isOurUrl = (s, url) => typeof url === "string" && url.startsWith(serverOf(s) + "/file/") && url.length < 300;
+    const isOurFile = (s, a) => (Array.isArray(a) ? a.length >= 1 && a.length <= MAX_PARTS && a.every((u) => isOurUrl(s, u)) : isOurUrl(s, a));
+
+    // Скачать ответ сервера, но не больше limit байт (сервер может быть враждебным)
+    async function readCapped(r, limit) {
+      const len = Number(r.headers?.get?.("content-length") || 0);
+      if (len > limit) throw new Error("Файл повреждён.");
+      if (!r.body || !r.body.getReader) {
+        const b = new Uint8Array(await r.arrayBuffer());
+        if (b.length > limit) throw new Error("Файл повреждён.");
+        return b;
+      }
+      const rd = r.body.getReader();
+      const chunks = []; let total = 0;
+      for (;;) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        total += value.length;
+        if (total > limit) { try { rd.cancel(); } catch {} throw new Error("Файл повреждён."); }
+        chunks.push(value);
+      }
+      const out = new Uint8Array(total); let o = 0;
+      for (const c of chunks) { out.set(c, o); o += c.length; }
+      return out;
+    }
 
     // Повторить неудавшуюся отправку
     async function resend(linkId) {
@@ -309,10 +352,16 @@
       try {
         if (h.file.exp && nowSec() > h.file.exp) throw new Error("Файл устарел: сервер хранит файлы 3 часа.");
         if (!isOurFile(s, h.file.url)) throw new Error("Неверный адрес файла.");
-        let r;
-        try { r = await fetch(h.file.url, FO); } catch (e) { throw netError(e); }
-        if (!r.ok) throw new Error(r.status === 404 ? "Файл устарел: сервер хранит файлы 3 часа." : `Не удалось скачать (ошибка ${r.status}).`);
-        const bytes = await C.openFile(new Uint8Array(await r.arrayBuffer()), h.file.key);
+        const parts = [];
+        for (const u of [].concat(h.file.url)) {
+          let r;
+          try { r = await fetch(u, FO); } catch (e) { throw netError(e); }
+          if (!r.ok) throw new Error(r.status === 404 ? "Файл устарел: сервер хранит файлы 3 часа." : `Не удалось скачать (ошибка ${r.status}).`);
+          parts.push(await readCapped(r, RES_CAP));
+        }
+        const all = parts.length === 1 ? parts[0] : new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+        if (parts.length > 1) { let o = 0; for (const p of parts) { all.set(p, o); o += p.length; } }
+        const bytes = await C.openFile(all, h.file.key);
         if (bytes.length !== h.file.size) throw new Error("Файл повреждён.");
         const text = h.kind === "text" ? new TextDecoder().decode(bytes) : null;
         // короткий текст — прямо в списке (файл не нужен); длинный — только файлом, в списке начало
@@ -383,6 +432,7 @@
           nonces.add(r.nonce);
           const o = r.obj;
           if (Math.abs(o.ts - m.time) > C.MAX_CLOCK_SKEW) { clockSkew++; continue; }
+          if (o.ts < nowSec() - REPLAY_WINDOW) continue;        // старое сообщение, подсунутое повторно
           const from = String(o.d || "");
           if (!from || from === s.deviceId) continue;           // своё
           const k = o.k || (o.u ? "link" : "");
@@ -399,12 +449,15 @@
               devicesChanged = true;
             } else touch(from, m.time);
           } else if (k === "bye") {
+            // удалять могут только известные участники группы (не удалённые ранее)
+            if (removed.has(from) || !devices.has(from)) continue;
             const x = String(o.x || "");
             if (x === s.deviceId) { removedMe = true; continue; }
             devices.delete(x);
             removed.add(x);
             devicesChanged = true;
           } else if (k === "ack") {
+            if (removed.has(from)) continue;
             touch(from, m.time);
             const e = sent.find((x) => x.i === o.i);
             const tg = e && e.to.find((x) => x.id === from);
@@ -447,7 +500,7 @@
         const add = fresh.filter((h) => !have.has(h.id)).reverse();
         // Сохраняем только то, что изменилось: на телефоне страница и фоновый обработчик
         // работают параллельно, и запись «всего сразу» могла бы затереть чужие свежие изменения.
-        const patch = { seen: [...seen].slice(-MAX_SEEN), nonces: [...nonces].slice(-MAX_SEEN) };
+        const patch = { seen: [...seen].slice(-MAX_SEEN), nonces: [...nonces].slice(-MAX_NONCES) };
         if (devicesChanged) { patch.devices = [...devices.values()]; patch.removed = [...removed].slice(-200); }
         if (sentChanged) {
           // статусы накладываем на свежую версию списка, а не на прочитанную в начале
@@ -499,7 +552,7 @@
       const since = s.sinceTs ? String(Math.max(0, s.sinceTs - 1)) : "all";
       const r = await fetch(`${serverOf(s)}/${t.control},${t.inbox}/json?poll=1&since=${since}`, FO);
       if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
-      const msgs = (await r.text()).split("\n").filter(Boolean)
+      const msgs = new TextDecoder().decode(await readCapped(r, 16 * 1024 * 1024)).split("\n").filter(Boolean)
         .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       const res = await handle(msgs, { advance: true });
       flushPending().catch(() => {});
@@ -511,6 +564,28 @@
       if (!s.secret || !s.deviceId) return "";
       const t = await topicsOf(s);
       return `${serverOf(s).replace(/^http/i, "ws")}/${t.control},${t.inbox}/ws`;
+    }
+
+    // Узнать, какие устройства уже есть в группе с этим ключом, НЕ подключаясь к ней
+    // (чтобы перед подключением по чужой ссылке показать: «вы подключаетесь к …»).
+    async function peek(secret, server) {
+      const srv = cleanUrl(server) || defaultServer;
+      const group = await C.deriveGroup(C.normalizeSecret(secret));
+      const r = await fetch(`${srv}/${group.topic}/json?poll=1&since=all`, FO);
+      if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
+      const msgs = new TextDecoder().decode(await readCapped(r, 16 * 1024 * 1024)).split("\n")
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter((m) => m && m.event === "message" && typeof m.message === "string")
+        .sort((a, b) => a.time - b.time);
+      const devs = new Map();
+      for (const m of msgs) {
+        const x = await C.open(group, m.message);
+        const o = x && x.obj;
+        if (!o || !o.d) continue;
+        if (o.k === "hello") devs.set(String(o.d), { name: String(o.f || "").slice(0, 60) || "Устройство", kind: KINDS.includes(o.kind) ? o.kind : "" });
+        else if (o.k === "bye") devs.delete(String(o.x || ""));
+      }
+      return [...devs.values()];
     }
 
     async function inboxTopic() {
@@ -637,7 +712,7 @@
     }
 
     return {
-      pair, hello, maybeHello, rename, removeDevice, leave,
+      pair, peek, hello, maybeHello, rename, removeDevice, leave,
       sendLink, sendText, sendFile, fetchFile, getFile, getText, resend, markOpened,
       cleanup, maybeCleanup, setKeepDays, storageStats, deleteFiles, markAllRead, unreadCount, handle, poll, wsUrl, inboxTopic, info, clearHistory, serial
     };
