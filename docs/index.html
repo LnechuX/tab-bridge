@@ -293,8 +293,28 @@
         <button id="closeSettings">Назад</button>
       </div>
       <div id="settingsMsg" class="msg" role="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>Память</h2>
+      <p class="muted">Присланные картинки хранятся <b>внутри Tab Bridge</b>, а не в «Фото». Чтобы картинка попала в «Фото», откройте её и нажмите «Сохранить». На сервере всё зашифровано и удаляется само: файлы через 3 часа, сообщения через 12 часов.</p>
+      <div class="mem" id="memStats">Считаю…</div>
+      <label for="keepDays">Хранить полученные файлы</label>
+      <select id="keepDays">
+        <option value="1">1 день</option>
+        <option value="7">7 дней</option>
+        <option value="30">30 дней</option>
+        <option value="0">Пока есть место (до 150 МБ)</option>
+      </select>
+      <p class="muted small">Старые файлы удаляются сами. Если файлы займут больше 150 МБ, удаляются самые старые.</p>
+      <button id="deleteFiles" class="wide">Удалить полученные файлы</button>
+      <button id="clearAll" class="wide mt6">Очистить всю историю</button>
+      <div id="memMsg" class="msg" role="status"></div>
+    </div>
+
+    <div class="card">
       <button id="forget" class="danger">Отключить этот телефон</button>
-      <p class="muted small">Телефон исчезнет из списка на остальных устройствах, ключ будет удалён с телефона.</p>
+      <p class="muted small">Телефон исчезнет из списка на остальных устройствах. С телефона удалятся ключ, история и все полученные файлы.</p>
     </div>
   </section>
 </main>

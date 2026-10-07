@@ -42,7 +42,9 @@
     clear() { return tx("readwrite", (s) => { s.clear(); }); }
   };
 
-  const core = g.TBCore.create({ kv: KV, kind: "phone", defaultServer: DEFAULT_SERVER, blobs: g.TBBlobs || null });
+  // Полученные файлы хранятся внутри приложения; до 150 МБ — лишнее удаляется само
+  const FILES_LIMIT = 150 * 1024 * 1024;
+  const core = g.TBCore.create({ kv: KV, kind: "phone", defaultServer: DEFAULT_SERVER, blobs: g.TBBlobs || null, maxBytes: FILES_LIMIT });
 
   async function server() { return cleanUrl(await KV.get("server", DEFAULT_SERVER)) || DEFAULT_SERVER; }
 
@@ -107,6 +109,7 @@
     if (reg) await unregister(reg);
     const keep = { openIn: await KV.get("openIn"), deviceName: await KV.get("deviceName") };  // настройки телефона не теряем
     await KV.clear();
+    if (g.TBBlobs) await g.TBBlobs.clear().catch(() => {});                                  // и полученные файлы
     for (const [k, v] of Object.entries(keep)) if (v !== undefined) await KV.set(k, v);
   }
 

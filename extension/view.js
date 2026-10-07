@@ -45,6 +45,13 @@ async function render() {
   document.title = (h.kind === "text" ? "Текст" : h.title) + " — Tab Bridge";
 
   if (h.status === "loading") { $("title").textContent = "Скачиваю…"; setTimeout(render, 800); return; }
+  if (h.status === "gone") {
+    $("title").textContent = h.kind === "text" ? "Текст" : h.title;
+    say(h.gone === "age" ? "Файл удалён автоматически: истёк срок хранения (настройка в «Устройства и настройки» → «Память»)."
+      : h.gone === "space" ? "Файл удалён автоматически, чтобы освободить место для новых."
+      : "Файл удалён с этого компьютера.", "muted");
+    return;
+  }
   if (h.status === "error") {
     $("title").textContent = h.kind === "text" ? "Текст не скачан" : h.title;
     say(h.error || "Не удалось скачать.", "err");
@@ -56,6 +63,11 @@ async function render() {
 
   if (h.kind === "text") {
     $("title").textContent = "Текст";
+    // короткий текст — в истории, длинный — в хранилище файлов
+    if (typeof h.text !== "string") {
+      const b = await TBBlobs.get(id);
+      h.text = b ? new TextDecoder().decode(new Uint8Array(await b.arrayBuffer())) : "";
+    }
     const pre = document.createElement("pre");
     pre.textContent = h.text || "";
     $("stage").append(pre);

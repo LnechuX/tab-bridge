@@ -12,7 +12,7 @@ async function call(msg) {
   catch (e) { return { ok: false, error: String(e?.message || e) }; }
 }
 
-function status(text, cls = "") { $("status").textContent = text; $("status").className = cls; }
+function setStatus(text, cls = "") { $("status").textContent = text; $("status").className = cls; }
 
 const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : k === "sender" ? "📤" : "🔹");
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
@@ -80,15 +80,15 @@ async function send(ids, btn) {
   if (busy) return;
   busy = true;
   btn.disabled = true;
-  status("Шифрую и отправляю…", "muted");
+  setStatus("Шифрую и отправляю…", "muted");
   const r = await call({ type: "send", to: ids });
   btn.disabled = false;
   busy = false;
   if (r.ok) {
-    status("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", "), "ok");
+    setStatus("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", "), "ok");
     view = "sent";
     await refresh();
-  } else status(r.error || "Не получилось отправить", "err");
+  } else setStatus(r.error || "Не получилось отправить", "err");
 }
 
 function renderList() {
@@ -118,7 +118,7 @@ function renderList() {
         b.addEventListener("click", async () => {
           b.disabled = true;
           const r = await call({ type: "resend", id: it.i });
-          status(r.ok ? "✓ Отправлено повторно" : (r.error || "Не получилось"), r.ok ? "ok" : "err");
+          setStatus(r.ok ? "✓ Отправлено повторно" : (r.error || "Не получилось"), r.ok ? "ok" : "err");
           refresh();
         });
         li.append(b);
@@ -128,7 +128,7 @@ function renderList() {
       const kindIcon = it.kind === "text" ? "✏️ " : it.kind === "file" ? (/^image\//.test(it.file?.mime || "") ? "🖼 " : "📎 ") : "";
       a.href = it.url || "#";
       a.title = it.url || it.title || "";
-      const state = it.status === "error" ? "не скачан" : it.status === "loading" ? "скачивается…" : it.opened ? "открыто" : "";
+      const state = it.status === "error" ? "не скачан" : it.status === "loading" ? "скачивается…" : it.status === "gone" ? "файл удалён" : it.opened ? "открыто" : "";
       a.append(el("span", "t", kindIcon + (it.title || it.url)),
         el("span", "m", [it.from ? `от «${it.from}»` : "", ago(it.time), state].filter(Boolean).join(" · ")));
       a.addEventListener("click", (e) => { e.preventDefault(); call({ type: "open-received", id: it.id }); });
@@ -140,7 +140,7 @@ function renderList() {
 
 async function refresh() {
   const r = await call({ type: "info" });
-  if (!r.ok) return status(r.error || "Ошибка", "err");
+  if (!r.ok) return setStatus(r.error || "Ошибка", "err");
   info = r;
   $("me").textContent = info.me.name || "";
   if (!FULL) { renderTargets(); renderCompose(); }
@@ -183,7 +183,7 @@ function renderCompose() {
   if (attached) $("attachName").textContent = attached.name;
 }
 function attach(blob, name) {
-  if (blob.size > 14 * 1024 * 1024) return status("Файл больше 14 МБ — такой не отправить.", "err");
+  if (blob.size > 14 * 1024 * 1024) return setStatus("Файл больше 14 МБ — такой не отправить.", "err");
   attached = { blob, name };
   renderCompose();
 }
@@ -203,15 +203,15 @@ function toBase64(buf) {
 $("composeSend").addEventListener("click", async () => {
   const to = info.targets.length >= 2 && $("composeTo").value ? [$("composeTo").value] : [];
   $("composeSend").disabled = true;
-  status(attached ? "Шифрую и отправляю файл…" : "Шифрую и отправляю…", "muted");
+  setStatus(attached ? "Шифрую и отправляю файл…" : "Шифрую и отправляю…", "muted");
   const r = attached
     ? await call({ type: "send-file", data: toBase64(await attached.blob.arrayBuffer()), mime: attached.blob.type, name: attached.name, to })
     : await call({ type: "send-text", text: $("composeText").value, to });
   if (r.ok) {
-    status("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", "), "ok");
+    setStatus("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", "), "ok");
     attached = null; $("composeText").value = "";
     view = "sent"; await refresh();
-  } else status(r.error || "Не получилось отправить", "err");
+  } else setStatus(r.error || "Не получилось отправить", "err");
   renderCompose();
 });
 

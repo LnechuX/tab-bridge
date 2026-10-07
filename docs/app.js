@@ -98,6 +98,7 @@
     if (sender) $("pushCard").hidden = true; else await renderPush();
     startLive();
     flushPendingSend();
+    core.maybeCleanup().catch(() => {});
   }
 
   // ---------- подключение ----------
@@ -363,8 +364,9 @@
       pic = el("img", "rthumb");
       pic.alt = "";
       core.getFile(it.id).then((b) => { if (b) { const u = URL.createObjectURL(b); thumbUrls.push(u); pic.src = u; } });
-    } else pic = el("span", "rk", it.kind === "text" ? "✏️" : it.status === "error" ? "⚠️" : it.kind === "file" && !isImage(it) ? "📎" : "🖼");
-    const state = it.status === "loading" ? "скачивается…" : it.status === "error" ? "не скачан — нажмите, чтобы повторить" : it.opened ? "открыто" : "";
+    } else pic = el("span", "rk", it.status === "gone" ? "🗑" : it.kind === "text" ? "✏️" : it.status === "error" ? "⚠️" : it.kind === "file" && !isImage(it) ? "📎" : "🖼");
+    const state = it.status === "loading" ? "скачивается…" : it.status === "error" ? "не скачан — нажмите, чтобы повторить" :
+      it.status === "gone" ? "файл удалён" : it.opened ? "открыто" : "";
     const body = el("span", "grow");
     body.append(el("span", "t" + (it.status === "error" ? " err-t" : ""), it.kind === "text" ? (it.title || "Текст") : it.title),
       el("span", "m", [it.from ? `от «${it.from}»` : "", ago(it.time), state].filter(Boolean).join(" · ")));
@@ -399,6 +401,11 @@
     $("viewerTitle").textContent = h.kind === "text" ? "Текст" : h.title;
     $("viewerMeta").textContent = [h.from ? `от «${h.from}»` : "", ago(h.time)].filter(Boolean).join(", ");
     if (h.status === "loading") { setMsg($("viewerMsg"), "Скачиваю…"); setTimeout(() => showViewer(id), 800); return; }
+    if (h.status === "gone") {
+      $("viewerBody").append(el("p", "muted center", h.gone === "age" ? "Файл удалён автоматически: истёк срок хранения (Настройки → Память)."
+        : h.gone === "space" ? "Файл удалён автоматически, чтобы освободить место для новых." : "Файл удалён с телефона."));
+      return;
+    }
     if (h.status === "error") {
       setMsg($("viewerMsg"), h.error || "Не удалось скачать.", "err");
       vbtn("Повторить", async () => { setMsg($("viewerMsg"), "Скачиваю…"); await core.fetchFile(id); render(); showViewer(id); }, true);
@@ -406,10 +413,12 @@
     }
     core.markOpened(id).then(render).catch(() => {});
     if (h.kind === "text") {
-      const pre = el("pre", "", h.text || "");
+      const text = (await core.getText(id)) || "";      // длинный текст лежит в хранилище файлов
+      h.text = text;
+      const pre = el("pre", "", text);
       $("viewerBody").append(pre);
       vbtn("📋 Скопировать текст", async () => {
-        try { await navigator.clipboard.writeText(h.text || ""); setMsg($("viewerMsg"), "✓ Скопировано", "ok"); }
+        try { await navigator.clipboard.writeText(text); setMsg($("viewerMsg"), "✓ Скопировано", "ok"); }
         catch { setMsg($("viewerMsg"), "Не удалось скопировать — выделите текст и скопируйте.", "err"); }
       }, true);
       const links = C.extractUrl(h.text || "");
@@ -776,7 +785,8 @@
     wantShared = false;
     const p = await KV.get("pendingShare", null);
     await KV.set("pendingShare", null);
-    if (!p || Date.now() - (p.ts || 0) > 10 * 60 * 1000) return;
+    if (!p) return;
+    if (Date.now() - (p.ts || 0) > 10 * 60 * 1000) { for (const f of p.files || []) TBBlobs.del(f.key).catch(() => {}); return; }
     const files = [];
     for (const f of p.files || []) {
       const b = await TBBlobs.get(f.key).catch(() => null);
@@ -829,7 +839,37 @@
     qs.value = [...qs.options].some((o) => o.value === qv) ? qv : "ask";
     $("openInBlock").hidden = i.me.kind === "sender";
     setMsg($("settingsMsg"), "");
+    setMsg($("memMsg"), "");
+    renderMemory();
   });
+  // ---------- память ----------
+  const mb = (n) => n >= 1048576 ? (n / 1048576).toFixed(1).replace(".0", "") + " МБ" : Math.max(0, Math.round(n / 1024)) + " КБ";
+  async function renderMemory() {
+    const st = await core.storageStats();
+    let usage = 0;
+    try { usage = (await navigator.storage.estimate()).usage || 0; } catch {}
+    $("memStats").textContent = `Полученных файлов: ${st.files} (${mb(st.bytes)} из ${mb(st.maxBytes)}). ` +
+      `Записей: ${st.history} получено, ${st.sent} отправлено.` + (usage ? ` Всего Tab Bridge занимает ${mb(usage)}.` : "");
+    $("keepDays").value = String(st.keepDays);
+  }
+  $("keepDays").addEventListener("change", async () => {
+    await core.setKeepDays(Number($("keepDays").value));
+    setMsg($("memMsg"), "Сохранено ✓", "ok");
+    renderMemory();
+  });
+  $("deleteFiles").addEventListener("click", async () => {
+    if (!confirm("Удалить все полученные картинки и файлы с телефона? Записи в истории останутся. Картинки, сохранённые в «Фото», не пострадают.")) return;
+    await core.deleteFiles();
+    setMsg($("memMsg"), "Файлы удалены ✓", "ok");
+    renderMemory();
+  });
+  $("clearAll").addEventListener("click", async () => {
+    if (!confirm("Очистить всю историю и удалить полученные файлы с телефона?")) return;
+    await core.clearHistory();
+    setMsg($("memMsg"), "История и файлы удалены ✓", "ok");
+    renderMemory();
+  });
+
   $("quickTarget").addEventListener("change", async () => {
     await KV.set("quickTarget", $("quickTarget").value);
     setMsg($("settingsMsg"), "Сохранено ✓", "ok");

@@ -6,7 +6,6 @@
 
   if (window.top !== window.self) { document.documentElement.textContent = ""; return; }
 
-  const C = window.TBCrypto;
   const core = TB.core;
   const $ = (id) => document.getElementById(id);
 

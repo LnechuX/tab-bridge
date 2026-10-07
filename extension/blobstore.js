@@ -29,6 +29,7 @@
       const v = await tx("readonly", (s) => s.get(id));
       return v ? new Blob([v.data], { type: v.type }) : null;
     },
+    keys() { return tx("readonly", (s) => s.getAllKeys()); },
     del(id) { return tx("readwrite", (s) => s.delete(id)); },
     clear() { return tx("readwrite", (s) => s.clear()); }
   });

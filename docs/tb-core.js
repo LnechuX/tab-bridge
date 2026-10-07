@@ -33,14 +33,19 @@
   const preview = (x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, 120);
   const TEXT_INLINE = 1800;      // короче — уходит прямо в сообщении, длиннее — зашифрованным файлом
   const MAX_TEXT = 200000;
+  const KEEP_INLINE_TEXT = 5000;  // длиннее — текст лежит только в хранилище файлов, в списке — начало
+  const PAYLOAD_TTL = 3 * 3600;   // столько сервер хранит файлы; после — повторить отправку файла нельзя
 
-  function create({ kv, kind, defaultServer = "https://ntfy.sh", blobs = null }) {
+  // maxBytes — сколько места на этом устройстве могут занимать полученные файлы
+  function create({ kv, kind, defaultServer = "https://ntfy.sh", blobs = null, maxBytes = 300 * 1024 * 1024 }) {
     const FO = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
     const DEF = {
       secret: "", server: defaultServer, deviceId: "", deviceName: "", kind: "",
       startTs: 0, sinceTs: 0, seen: [], nonces: [],
       devices: [], removed: [], history: [], sent: [],
-      lastHello: 0, lastTargets: [], pendingBye: []
+      lastHello: 0, lastTargets: [], pendingBye: [],
+      keepDays: 7,        // сколько дней хранить полученные файлы (0 — пока есть место)
+      lastCleanup: 0
     };
 
     let chain = Promise.resolve();
@@ -99,6 +104,7 @@
         history: [], sent: [], lastHello: 0, lastTargets: [], pendingBye: [],
         kind: KINDS.includes(opts.kind) ? opts.kind : ""
       });
+      if (blobs) await blobs.clear().catch(() => {});
       try { await hello(false); } catch {}
     }
 
@@ -258,10 +264,14 @@
       if (!e) throw new Error("Запись не найдена.");
       const failedIds = e.to.filter((x) => x.s === "failed").map((x) => x.id);
       const ids = failedIds.length ? failedIds : e.to.map((x) => x.id);
+      if (e.pl && e.pl.k === "file" && (e.pl.e ? nowSec() > e.pl.e - 60 : nowSec() - e.time > PAYLOAD_TTL)) {
+        throw new Error("Файл уже удалён с сервера (он хранит файлы 3 часа). Отправьте его заново.");
+      }
       if (e.pl) {
         const base = { kind: e.kind, title: e.title, url: e.url, name: e.name, mime: e.mime, size: e.size };
         return sendPayload(e.pl, base, ids);
       }
+      if (e.kind && e.kind !== "link") throw new Error("Это уже не повторить — отправьте заново.");
       return sendLink(e.url, e.title, ids);
     }
 
@@ -287,12 +297,14 @@
         if (!r.ok) throw new Error(r.status === 404 ? "Файл устарел: сервер хранит файлы 3 часа." : `Не удалось скачать (ошибка ${r.status}).`);
         const bytes = await C.openFile(new Uint8Array(await r.arrayBuffer()), h.file.key);
         if (bytes.length !== h.file.size) throw new Error("Файл повреждён.");
-        await blobs.put(id, new Blob([bytes], { type: h.file.mime }));
         const text = h.kind === "text" ? new TextDecoder().decode(bytes) : null;
+        // короткий текст — прямо в списке (файл не нужен); длинный — только файлом, в списке начало
+        const inline = text != null && text.length <= KEEP_INLINE_TEXT;
+        if (!inline) await blobs.put(id, new Blob([bytes], { type: h.file.mime }));
         await patchHistory(id, (x) => {
           x.status = "ok"; delete x.error;
           delete x.file.key; delete x.file.url;          // ключ больше не нужен
-          if (text != null) { x.text = text; x.title = preview(text); }
+          if (text != null) { x.title = preview(text); if (inline) { x.text = text; x.file.inline = true; } }
         });
         await ack(s, id, "delivered");
         return true;
@@ -390,7 +402,7 @@
               needReply = true;
             } else touch(from, m.time);
             const base = { id: String(o.i || m.id), from: String(o.f || "").slice(0, 60), fromId: from, time: m.time, opened: false };
-            if (k === "text") fresh.push(Object.assign(base, { kind: "text", text: o.x.slice(0, MAX_TEXT), title: preview(o.x), status: "ok" }));
+            if (k === "text") fresh.push(Object.assign(base, { kind: "text", text: o.x.slice(0, KEEP_INLINE_TEXT), title: preview(o.x), status: "ok" }));
             else {
               const asText = o.tx === 1;
               fresh.push(Object.assign(base, {
@@ -453,6 +465,7 @@
           const files = fresh.filter((h) => h.file && blobs);
           if (files.length) {
             for (const h of files) await fetchFile(h.id);
+            await cleanup().catch(() => {});
             const hist = (await load()).history;
             fresh = fresh.map((h) => hist.find((x) => x.id === h.id) || h);
           }
@@ -516,6 +529,90 @@
       });
     }
 
+    // ---------- память ----------
+    // Удаляет полученные файлы старше keepDays и самые старые, если файлы занимают больше maxBytes;
+    // убирает «осиротевшие» файлы и устаревшие данные для повторной отправки.
+    async function cleanup() {
+      const s = await load();
+      const now = nowSec();
+      const keep = Number(s.keepDays) || 0;
+      const drop = new Map();                      // id → причина
+      // «хранится файлом»: текст, который уже есть в списке, файлом хранить не нужно (его копия удалится как лишняя)
+      const stored = (h) => h.file && h.status === "ok" && !h.file.gone && !h.file.inline && !(h.kind === "text" && typeof h.text === "string");
+      for (const h of s.history) if (stored(h) && keep > 0 && now - h.time > keep * 86400) drop.set(h.id, "age");
+      let sum = 0;
+      for (const h of s.history) {                 // история — от новых к старым
+        if (!stored(h) || drop.has(h.id)) continue;
+        sum += h.file.size;
+        if (maxBytes && sum > maxBytes) drop.set(h.id, "space");
+      }
+      if (blobs) {
+        for (const id of drop.keys()) await blobs.del(id).catch(() => {});
+        if (blobs.keys) {
+          const live = new Set(s.history.filter((h) => stored(h) && !drop.has(h.id)).map((h) => h.id));
+          for (const key of await blobs.keys().catch(() => [])) {
+            const k = String(key);
+            if (k.startsWith("share:")) {                          // картинки из «Поделиться» (Android)
+              const ts = Number(k.split(":")[1]) || 0;
+              if (Date.now() - ts > 3600 * 1000) await blobs.del(k).catch(() => {});
+            } else if (!live.has(k)) await blobs.del(k).catch(() => {});
+          }
+        }
+      }
+      await serial(async () => {
+        const cur = await load();
+        for (const h of cur.history) {
+          const why = drop.get(h.id);
+          if (why) { h.status = "gone"; h.gone = why; h.file.gone = true; delete h.file.key; delete h.file.url; }
+        }
+        // у файлов в данных для повтора лежит ключ файла — через 3 часа (файла на сервере уже нет) удаляем
+        for (const e of cur.sent) if (e.pl && e.pl.k === "file" && now - e.time > PAYLOAD_TTL) delete e.pl;
+        await kv.setMany({ history: cur.history, sent: cur.sent, lastCleanup: now });
+      });
+      return drop.size;
+    }
+
+    async function maybeCleanup() {
+      const s = await load();
+      if (nowSec() - (s.lastCleanup || 0) > 3600) await cleanup();
+    }
+
+    async function setKeepDays(days) {
+      await kv.setMany({ keepDays: Math.max(0, Math.min(365, Number(days) || 0)) });
+      await cleanup();
+    }
+
+    async function storageStats() {
+      const s = await load();
+      let files = 0, bytes = 0;
+      for (const h of s.history) {
+        if (h.file && h.status === "ok" && !h.file.gone && !h.file.inline && !(h.kind === "text" && typeof h.text === "string")) { files++; bytes += h.file.size; }
+      }
+      return { files, bytes, history: s.history.length, sent: s.sent.length, keepDays: Number(s.keepDays) || 0, maxBytes };
+    }
+
+    // Удалить все полученные файлы (записи в истории остаются, с пометкой «удалён»)
+    async function deleteFiles() {
+      if (blobs) await blobs.clear().catch(() => {});
+      await serial(async () => {
+        const cur = await load();
+        for (const h of cur.history) if (h.file && !h.file.inline && !h.file.gone && !(h.kind === "text" && typeof h.text === "string")) {
+          h.status = "gone"; h.gone = "manual"; h.file.gone = true; delete h.file.key; delete h.file.url;
+        }
+        await kv.setMany({ history: cur.history });
+      });
+    }
+
+    // Текст присланной записи (короткий — из списка, длинный — из хранилища файлов)
+    async function getText(id) {
+      const s = await load();
+      const h = s.history.find((x) => x.id === id);
+      if (!h) return null;
+      if (typeof h.text === "string") return h.text;
+      const b = blobs ? await blobs.get(id) : null;
+      return b ? new TextDecoder().decode(new Uint8Array(await b.arrayBuffer())) : null;
+    }
+
     async function clearHistory() {
       await serial(() => kv.setMany({ history: [], sent: [] }));
       if (blobs) await blobs.clear().catch(() => {});
@@ -523,7 +620,8 @@
 
     return {
       pair, hello, maybeHello, rename, removeDevice, leave,
-      sendLink, sendText, sendFile, fetchFile, getFile, resend, markOpened, markAllRead, unreadCount, handle, poll, wsUrl, inboxTopic, info, clearHistory, serial
+      sendLink, sendText, sendFile, fetchFile, getFile, getText, resend, markOpened,
+      cleanup, maybeCleanup, setKeepDays, storageStats, deleteFiles, markAllRead, unreadCount, handle, poll, wsUrl, inboxTopic, info, clearHistory, serial
     };
   }
 

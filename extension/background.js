@@ -14,7 +14,9 @@ const kv = {
   getAll: (keys) => api.storage.local.get(keys),
   setMany: (o) => api.storage.local.set(o)
 };
-const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER, blobs: globalThis.TBBlobs });
+// Полученные файлы хранятся внутри расширения (не в папках компьютера); до 300 МБ, лишнее удаляется само
+const FILES_LIMIT = 300 * 1024 * 1024;
+const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER, blobs: globalThis.TBBlobs, maxBytes: FILES_LIMIT });
 
 // Присланный текст или файл открываем на странице просмотра расширения
 const viewUrl = (id) => api.runtime.getURL("view.html#" + encodeURIComponent(id));
@@ -230,6 +232,7 @@ async function wake() {
   connectLive().catch(() => {});
   poll().catch(() => {});
   core.maybeHello().catch(() => {});
+  core.maybeCleanup().catch(() => {});
 }
 
 // ---------- меню ----------
@@ -318,6 +321,14 @@ async function handle(msg, sender) {
     }
     case "retry-file": await core.fetchFile(String(msg.id)); return {};
     case "mark-opened": await core.markOpened(String(msg.id)); updateBadge(); return {};
+    case "storage-stats": {
+      const st = await core.storageStats();
+      let usage = 0;
+      try { usage = (await navigator.storage.estimate()).usage || 0; } catch {}
+      return { stats: st, usage };
+    }
+    case "set-keep-days": await core.setKeepDays(msg.days); return {};
+    case "delete-files": await core.deleteFiles(); return {};
     case "view": await api.tabs.create({ url: viewUrl(String(msg.id)), active: true }); return {};
     case "check": await connectLive(); await poll(); return {};
     case "open-received": {
@@ -333,7 +344,7 @@ async function handle(msg, sender) {
     case "dismiss-warning": await api.storage.local.set({ lastWarning: "" }); return {};
     case "remove-device": await core.removeDevice(msg.id); await setupMenus(); return {};
     case "rename": await core.rename(msg.name); return {};
-    case "clear-history": await core.clearHistory(); updateBadge(); return {};
+    case "clear-history": await core.clearHistory(); await api.storage.local.set({ tabIds: {} }); updateBadge(); return {};
     case "set-key": {
       // новый ключ (свой или вставленный с другого ПК): подключаемся заново
       const bad = C.checkSecret(msg.secret);

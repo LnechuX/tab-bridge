@@ -45,6 +45,7 @@
     details .card { margin-top: 10px; }
     h3 { font-size: 14px; margin: 0 0 6px; }
     hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+    .mem { font-size: 15px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
     select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   </style>
 </head>
@@ -116,8 +117,30 @@
     <label class="check"><input id="focusOpened" type="checkbox"> …и переключаться на них</label>
     <label class="check"><input id="notify" type="checkbox"> Показывать уведомление</label>
     <div class="actions">
-      <button id="clearHistory">Очистить историю</button>
       <span id="basicMsg" role="status"></span>
+    </div>
+  </div>
+
+  <h2>Память</h2>
+  <div class="card">
+    <p class="muted" style="margin-top:0">
+      Присланные картинки и файлы хранятся <b>внутри расширения</b>, а не в папках компьютера.
+      Кнопка «Скачать» сохраняет файл в папку <b>«Загрузки»</b> вашего браузера.
+      На сервере всё зашифровано и удаляется само: файлы через 3 часа, сообщения через 12 часов.
+    </p>
+    <div class="mem" id="memStats">Считаю…</div>
+    <label for="keepDays">Хранить полученные файлы</label>
+    <select id="keepDays">
+      <option value="1">1 день</option>
+      <option value="7">7 дней</option>
+      <option value="30">30 дней</option>
+      <option value="0">Пока есть место (до 300 МБ)</option>
+    </select>
+    <div class="muted" style="margin-top:6px">Старые файлы удаляются сами. Если файлы займут больше 300 МБ, удаляются самые старые.</div>
+    <div class="actions">
+      <button id="deleteFiles">Удалить полученные файлы</button>
+      <button id="clearAll">Очистить всю историю</button>
+      <span id="memMsg" role="status"></span>
     </div>
   </div>
 

@@ -93,9 +93,33 @@ $("deviceName").addEventListener("input", () => {
 for (const id of ["autoOpen", "focusOpened", "notify"]) {
   $(id).addEventListener("change", () => api.storage.local.set({ [id]: $(id).checked }).then(() => say($("basicMsg"), "Сохранено ✓", "ok")));
 }
-$("clearHistory").addEventListener("click", async () => {
+// ---------- память ----------
+const mb = (n) => n >= 1048576 ? (n / 1048576).toFixed(1).replace(".0", "") + " МБ" : Math.max(0, Math.round(n / 1024)) + " КБ";
+async function renderMemory() {
+  const r = await call({ type: "storage-stats" });
+  if (!r.ok) return;
+  const st = r.stats;
+  $("memStats").textContent =
+    `Полученных файлов: ${st.files} (${mb(st.bytes)} из ${mb(st.maxBytes)}). Записей в истории: ${st.history} получено, ${st.sent} отправлено.` +
+    (r.usage ? ` Всего расширение занимает ${mb(r.usage)}.` : "");
+  $("keepDays").value = String(st.keepDays);
+}
+$("keepDays").addEventListener("change", async () => {
+  await call({ type: "set-keep-days", days: Number($("keepDays").value) });
+  say($("memMsg"), "Сохранено ✓", "ok");
+  renderMemory();
+});
+$("deleteFiles").addEventListener("click", async () => {
+  if (!confirm("Удалить все полученные картинки и файлы с этого компьютера? Записи в истории останутся.")) return;
+  await call({ type: "delete-files" });
+  say($("memMsg"), "Файлы удалены ✓", "ok");
+  renderMemory();
+});
+$("clearAll").addEventListener("click", async () => {
+  if (!confirm("Очистить всю историю (отправленное и полученное) и удалить полученные файлы с этого компьютера?")) return;
   await call({ type: "clear-history" });
-  say($("basicMsg"), "История очищена ✓", "ok");
+  say($("memMsg"), "История и файлы удалены ✓", "ok");
+  renderMemory();
 });
 
 // ---------- кнопка Tab Bridge ----------
@@ -222,5 +246,5 @@ if (location.hash === "#welcome") {
 } else if (location.hash === "#button") {
   setTimeout(() => $("button").scrollIntoView({ behavior: "smooth" }), 300);
 }
-load().then(renderDevices);
+load().then(renderDevices).then(renderMemory);
 api.storage.onChanged.addListener((ch) => { if (ch.devices) renderDevices(); });

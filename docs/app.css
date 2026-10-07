@@ -253,3 +253,5 @@ li.recv .err-t { color: var(--err); }
 .viewer-actions { display: grid; gap: 8px; }
 li.recv a.recv-row { display: flex; align-items: center; gap: 12px; }
 li.recv a.recv-row .grow { flex: 1; min-width: 0; }
+.mem { font-size: 15px; padding: 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); line-height: 1.5; }
+#forget { margin-top: 0; }
