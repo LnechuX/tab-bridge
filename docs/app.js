@@ -637,11 +637,15 @@
     return (await quickIds(i)) ?? (await chooseTargets(i, what));
   }
 
+  const OWN_URL_MSG = "В буфере адрес самого Tab Bridge (его копировали для настройки команды), а не страницы. " +
+    "Откройте нужную страницу → «Поделиться» → «Скопировать» и нажмите кнопку ещё раз.";
+
   // --- ссылки ---
   async function doSend(ids, btn, presetUrl, presetTitle) {
     const raw = presetUrl || $("url").value;
     const u = C.extractUrl(raw) || (C.isSafeUrl(raw.trim()) ? raw.trim() : "");
     if (!u) return setMsg($("sendMsg"), "Вставьте ссылку, начинающуюся с https:// или http://", "err");
+    if (TB.isOwnUrl(u)) return setMsg($("sendMsg"), OWN_URL_MSG, "err");
     const ok = await runSend(ids, (to) => core.sendLink(u, presetTitle || "", to), btn);
     if (ok) $("url").value = "";
     return ok;
@@ -653,6 +657,7 @@
   });
 
   async function quickSend(u, title, after) {
+    if (TB.isOwnUrl(u)) return setMsg($("sendMsg"), OWN_URL_MSG, "err");
     const ids = await pickTargets(hostOf(u));
     if (!ids) { $("url").value = u; $("manualSend").open = true; return; }
     const ok = await doSend(ids, null, u, title);

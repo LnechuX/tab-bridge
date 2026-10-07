@@ -155,6 +155,11 @@
   // Ссылка передаётся странице send.html во фрагменте адреса (#...): эта часть
   // никогда не уходит в сеть — ни на GitHub, ни куда-либо ещё.
   const appBase = () => g.location.origin + g.location.pathname.replace(/[^/]*$/, "");
+  // Адрес самого Tab Bridge (например, скопированный при настройке команды) — отправлять его незачем
+  const isOwnUrl = (u) => {
+    const x = String(u || "").replace(/^x-safari-/i, "").split(/[?#]/)[0];
+    return [appBase(), appBase() + "index.html", appBase() + "send.html"].includes(x);
+  };
   const quick = {
     sendPage: () => appBase() + "send.html",
     // Код закладки: берёт адрес и заголовок открытой страницы и переходит на send.html.
@@ -172,15 +177,17 @@
       let raw = at >= 0 ? h.slice(at + 2) : "";
       // Быстрая команда может прислать ссылку как закодированной, так и «как есть»
       if (!/^https?:\/\//i.test(raw)) { try { raw = decodeURIComponent(raw); } catch {} }
-      const url = g.TBCrypto.extractUrl(raw) || (g.TBCrypto.isSafeUrl(raw) ? raw : "");
-      const text = url ? "" : String(raw || "").trim().slice(0, 200000);
-      return { url, text, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back" };
+      let url = g.TBCrypto.extractUrl(raw) || (g.TBCrypto.isSafeUrl(raw) ? raw : "");
+      let text = url ? "" : String(raw || "").trim().slice(0, 200000);
+      if (isOwnUrl(url)) { url = ""; text = ""; }
+      // empty: адрес вида «send.html#u=» без ссылки — команда «На ПК» ничего не передала
+      return { url, text, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back", empty: at >= 0 && !url && !text };
     }
   };
 
   g.KV = KV;
   g.TB = {
     core, push: { register, unregister }, wipe, server, DEFAULT_SERVER, cleanUrl,
-    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick, VERSION
+    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick, VERSION, isOwnUrl
   };
 })(self);
