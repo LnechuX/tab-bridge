@@ -180,7 +180,8 @@ function renderCompose() {
   $("composeSend").textContent = t.length === 1 ? `Отправить на «${t[0].name}»` : "Отправить";
   $("composeSend").disabled = !t.length || (!attached && !$("composeText").value.trim());
   $("attachInfo").hidden = !attached;
-  if (attached) $("attachName").textContent = attached.name;
+  $("fullRow").hidden = !attached || !/^image\//.test(attached.blob.type || "");
+  if (attached) $("attachName").textContent = `${attached.name} (${mb(attached.blob.size)})`;
 }
 function attach(blob, name) {
   if (blob.size > 14 * 1024 * 1024) return setStatus("Файл больше 14 МБ — такой не отправить.", "err");
@@ -195,6 +196,7 @@ $("composeText").addEventListener("paste", (e) => {
 $("attachBtn").addEventListener("click", () => $("fileInput").click());
 $("fileInput").addEventListener("change", () => { const f = $("fileInput").files[0]; if (f) attach(f, f.name); $("fileInput").value = ""; });
 $("attachClear").addEventListener("click", () => { attached = null; renderCompose(); });
+const mb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " МБ" : Math.max(1, Math.round(n / 1024)) + " КБ");
 function toBase64(buf) {
   const b = new Uint8Array(buf); let s = "";
   for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
@@ -203,12 +205,18 @@ function toBase64(buf) {
 $("composeSend").addEventListener("click", async () => {
   const to = info.targets.length >= 2 && $("composeTo").value ? [$("composeTo").value] : [];
   $("composeSend").disabled = true;
-  setStatus(attached ? "Шифрую и отправляю файл…" : "Шифрую и отправляю…", "muted");
-  const r = attached
-    ? await call({ type: "send-file", data: toBase64(await attached.blob.arrayBuffer()), mime: attached.blob.type, name: attached.name, to })
+  let file = attached, note = "";
+  if (file && !$("fullQuality").checked && globalThis.TBShrink) {
+    setStatus("Уменьшаю картинку…", "muted");
+    const sh = await TBShrink.image(file.blob, file.name);       // большие скриншоты уходят в разы быстрее
+    if (sh.changed) { file = { blob: sh.blob, name: sh.name }; note = ` (${mb(sh.before)} → ${mb(sh.after)})`; }
+  }
+  setStatus(file ? "Шифрую и отправляю файл" + note + "…" : "Шифрую и отправляю…", "muted");
+  const r = file
+    ? await call({ type: "send-file", data: toBase64(await file.blob.arrayBuffer()), mime: file.blob.type, name: file.name, to })
     : await call({ type: "send-text", text: $("composeText").value, to });
   if (r.ok) {
-    setStatus("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", "), "ok");
+    setStatus("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", ") + note, "ok");
     attached = null; $("composeText").value = "";
     view = "sent"; await refresh();
   } else setStatus(r.error || "Не получилось отправить", "err");

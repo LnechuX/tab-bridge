@@ -83,6 +83,12 @@
       if ($("remember").checked) await KV.set("quickTarget", ids.length ? ids[0] : "all");
       const names = e.to.filter((t) => t.s !== "failed").map((t) => `«${t.name}»`).join(", ");
       view("ok", "Отправлено", "на " + names);
+      if (!req.url) {
+        const devs = new Map((await core.info()).devices.map((d) => [d.id, d]));
+        if (e.to.some((t) => TBCore.pcOutdated(devs.get(t.id)))) {
+          $("sub").textContent += ". На компьютере старая версия расширения — текст может не дойти, обновите Tab Bridge.";
+        }
+      }
       if (navigator.vibrate && navigator.userActivation?.hasBeenActive) try { navigator.vibrate(40); } catch {}
       core.poll().catch(() => {});   // заодно обновим список устройств на будущее
       if (cameFromPage) setTimeout(goBack, 900);

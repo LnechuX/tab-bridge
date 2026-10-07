@@ -528,8 +528,13 @@
       const g = el("div", "grow");
       const nm = el("div", "nm", d.name);
       if (isMe) nm.append(el("span", "you", d.kind === "sender" ? "этот Safari" : "этот телефон"));
-      const meta = [d.kind === "sender" ? "только отправка" : "", !isMe && d.lastSeen ? "в сети " + ago(d.lastSeen) : ""].filter(Boolean).join(" · ");
+      const ver = isMe ? d.version : d.vr;
+      const meta = [d.kind === "sender" ? "только отправка" : "", !isMe && d.lastSeen ? "в сети " + ago(d.lastSeen) : "",
+        ver ? "версия " + ver : ""].filter(Boolean).join(" · ");
       g.append(nm, el("div", "muted small", meta));
+      if (!isMe && TBCore.pcOutdated(d)) {
+        g.append(el("div", "warn small", "Старая версия расширения — текст и картинки могут не доходить. Обновите Tab Bridge на этом компьютере."));
+      }
       div.append(el("span", "ic", icon(isMe && d.kind !== "sender" ? "phone" : d.kind)), g);
       if (!isMe) {
         const b = el("button", "", "Удалить");
@@ -567,6 +572,7 @@
       const e = Array.isArray(res) ? res[res.length - 1] : res;
       setMsg($("sendMsg"), "");
       $("sentDoneText").textContent = "Отправлено на " + e.to.filter((x) => x.s !== "failed").map((x) => `«${x.name}»`).join(", ");
+      $("sentDoneWarn").hidden = !(await outdatedPcs(e)).length;
       $("sentDone").hidden = false;
       clearTimeout(doneTimer);
       doneTimer = setTimeout(() => { $("sentDone").hidden = true; }, 8000);
@@ -580,6 +586,13 @@
       busy = false;
       if (btn) btn.disabled = false;
     }
+  }
+
+  // Компьютеры со старым расширением, которым ушёл текст или картинка (они могут их не принять)
+  async function outdatedPcs(e) {
+    if (!e || (e.kind !== "text" && e.kind !== "file")) return [];
+    const devs = new Map((await core.info()).devices.map((d) => [d.id, d]));
+    return e.to.map((t) => devs.get(t.id)).filter((d) => TBCore.pcOutdated(d));
   }
 
   // Куда отправлять без вопросов: один получатель — ему; иначе настройка «Быстрая отправка».
@@ -697,6 +710,7 @@
       box.append(d);
     });
     $("photoSend").hidden = !photos.length;
+    $("fullQualityRow").hidden = !photos.length;
     $("photoSendMain").textContent = photos.length > 1 ? `Отправить ${photos.length} картинки` : "Отправить картинку";
   }
   function addPhotos(list) {
@@ -712,6 +726,8 @@
   }
   $("photoPick").addEventListener("click", () => $("photoInput").click());
   $("photoInput").addEventListener("change", () => { addPhotos([...$("photoInput").files]); $("photoInput").value = ""; });
+  KV.get("fullQuality", false).then((v) => { $("fullQuality").checked = Boolean(v); });
+  $("fullQuality").addEventListener("change", () => KV.set("fullQuality", $("fullQuality").checked));
 
   // Вставить картинку из буфера. quiet — не ругаться, если картинки нет.
   async function pasteImage(quiet) {
@@ -740,9 +756,18 @@
     const list = photos.slice();
     const ok = await runSend(ids, async (to, progress) => {
       const out = [];
+      const full = $("fullQuality").checked;
       for (let n = 0; n < list.length; n++) {
-        progress(list.length > 1 ? `Отправляю ${n + 1} из ${list.length}…` : "Шифрую и отправляю…");
-        out.push(await core.sendFile(list[n].blob, list[n].name, to));
+        const head = list.length > 1 ? `Картинка ${n + 1} из ${list.length}: ` : "";
+        progress(head + (full ? "шифрую…" : "уменьшаю…"));
+        // по умолчанию уменьшаем: скриншот 2–5 МБ → обычно меньше 1 МБ, отправка в разы быстрее
+        const item = full ? { blob: list[n].blob, name: list[n].name } : await TBShrink.image(list[n].blob, list[n].name);
+        const mbText = (b) => (b / 1048576).toFixed(1).replace(".0", "") + " МБ";
+        const sizeNote = item.changed ? ` (${mbText(item.before)} → ${mbText(item.after)})` : ` (${mbText(item.blob.size)})`;
+        progress(head + "отправляю…" + sizeNote);
+        out.push(await core.sendFile(item.blob, item.name, to, {
+          onProgress: (p) => progress(`${head}отправляю ${Math.round(p * 100)}%${sizeNote}`)
+        }));
         URL.revokeObjectURL(list[n].url);
         photos = photos.filter((p) => p !== list[n]);
         renderPhotos();
@@ -898,6 +923,7 @@
     await core.rename($("myName").value);
     setMsg($("settingsMsg"), "Сохранено ✓ — новое имя увидят ваши устройства", "ok");
   });
+  $("appVersion").textContent = "Tab Bridge " + TB.VERSION;
   $("forget").addEventListener("click", async () => {
     if (!confirm("Отключить этот телефон? Он исчезнет из списка на остальных устройствах.")) return;
     await TB.wipe(await swReady, true);
@@ -1043,12 +1069,19 @@
       if (!url) return;
       const sock = new WebSocket(url);
       ws = sock;
+      let ping = null;
+      sock.onopen = () => { ping = setInterval(() => { if (sock.readyState === 1) try { sock.send("ping"); } catch {} }, 20000); };
       sock.onmessage = async (e) => {
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
         if (m.event === "message") onResult(await core.handle([m]));
       };
-      sock.onclose = sock.onerror = () => { if (ws === sock) ws = null; };
+      sock.onclose = sock.onerror = () => {
+        clearInterval(ping);
+        if (ws !== sock) return;
+        ws = null;
+        if (!document.hidden && !$("app").hidden) setTimeout(() => { poll(); connectWs(); }, 3000);
+      };
     } catch { ws = null; }
   }
   async function startLive() {

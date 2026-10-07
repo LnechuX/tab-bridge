@@ -16,7 +16,8 @@ const kv = {
 };
 // Полученные файлы хранятся внутри расширения (не в папках компьютера); до 300 МБ, лишнее удаляется само
 const FILES_LIMIT = 300 * 1024 * 1024;
-const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER, blobs: globalThis.TBBlobs, maxBytes: FILES_LIMIT });
+const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER, blobs: globalThis.TBBlobs, maxBytes: FILES_LIMIT,
+  version: api.runtime.getManifest().version });
 
 // Присланный текст или файл открываем на странице просмотра расширения
 const viewUrl = (id) => api.runtime.getURL("view.html#" + encodeURIComponent(id));
@@ -200,6 +201,13 @@ async function poll() {
 
 let ws = null;
 let wsKey = "";
+// Живое соединение с сервером. Браузер усыпляет фон расширения после 30 с тишины, а сервер
+// подаёт признаки жизни только раз в 45 с — соединение рвалось, и новое приходило с задержкой.
+// Поэтому раз в 20 с сами шлём короткий сигнал (сервер такие сообщения просто выбрасывает):
+// это держит фон бодрым, и вкладки, текст и картинки приходят сразу.
+const WS_PING_MS = 20000;
+let wsPing = null;
+let wsRetry = null;
 async function connectLive() {
   await init();
   const url = await core.wsUrl();
@@ -211,12 +219,23 @@ async function connectLive() {
     const sock = new WebSocket(url);
     ws = sock;
     wsKey = url;
+    sock.onopen = () => {
+      clearInterval(wsPing);
+      wsPing = setInterval(() => { if (sock.readyState === 1) { try { sock.send("ping"); } catch {} } }, WS_PING_MS);
+      poll().catch(() => {});                 // забрать то, что пришло, пока соединения не было
+    };
     sock.onmessage = (e) => {
       let m;
       try { m = JSON.parse(e.data); } catch { return; }
       if (m.event === "message") core.handle([m]).then(afterHandle).catch(() => {});
     };
-    sock.onclose = sock.onerror = () => { if (ws === sock) ws = null; };
+    sock.onclose = sock.onerror = () => {
+      if (ws !== sock) return;
+      ws = null;
+      clearInterval(wsPing); wsPing = null;
+      clearTimeout(wsRetry);
+      wsRetry = setTimeout(() => connectLive().catch(() => {}), 3000);   // переподключиться сразу, не ждать таймера
+    };
   } catch { ws = null; }
 }
 

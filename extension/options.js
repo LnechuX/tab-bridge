@@ -39,7 +39,8 @@ async function renderDevices() {
     const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = d.name;
     if (isMe) { const y = document.createElement("span"); y.className = "you"; y.textContent = "этот компьютер"; nm.append(y); }
     const m = document.createElement("div"); m.className = "muted";
-    m.textContent = isMe ? "" : [d.kind === "sender" ? "только отправка (быстрая кнопка)" : "", ago(d.lastSeen)].filter(Boolean).join(" · ");
+    const ver = d.vr || d.version ? "версия " + (d.vr || d.version) : "";
+    m.textContent = isMe ? ver : [d.kind === "sender" ? "только отправка (быстрая кнопка)" : "", ago(d.lastSeen), ver].filter(Boolean).join(" · ");
     g.append(nm, m);
     div.append(ic, g);
     if (!isMe) {

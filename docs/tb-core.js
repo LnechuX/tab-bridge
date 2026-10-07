@@ -37,13 +37,14 @@
   const PAYLOAD_TTL = 3 * 3600;   // столько сервер хранит файлы; после — повторить отправку файла нельзя
 
   // maxBytes — сколько места на этом устройстве могут занимать полученные файлы
-  function create({ kv, kind, defaultServer = "https://ntfy.sh", blobs = null, maxBytes = 300 * 1024 * 1024 }) {
+  function create({ kv, kind, defaultServer = "https://ntfy.sh", blobs = null, maxBytes = 300 * 1024 * 1024, version = "" }) {
+    const VERSION = String(version || "").slice(0, 20);
     const FO = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
     const DEF = {
       secret: "", server: defaultServer, deviceId: "", deviceName: "", kind: "",
       startTs: 0, sinceTs: 0, seen: [], nonces: [],
       devices: [], removed: [], history: [], sent: [],
-      lastHello: 0, lastTargets: [], pendingBye: [],
+      lastHello: 0, helloVersion: "", lastTargets: [], pendingBye: [],
       keepDays: 7,        // сколько дней хранить полученные файлы (0 — пока есть место)
       lastCleanup: 0
     };
@@ -111,13 +112,14 @@
     async function hello(reply) {
       const s = await load();
       if (!s.secret || !s.deviceId) return;
-      await control(s, { k: "hello", f: s.deviceName, kind: kindOf(s), r: reply ? 1 : 0 });
-      await kv.setMany({ lastHello: nowSec() });
+      await control(s, { k: "hello", f: s.deviceName, kind: kindOf(s), r: reply ? 1 : 0, av: VERSION });
+      await kv.setMany({ lastHello: nowSec(), helloVersion: VERSION });
     }
 
     async function maybeHello() {
       const s = await load();
-      if (s.secret && s.deviceId && nowSec() - s.lastHello > HELLO_EVERY) await hello(false);
+      // после обновления сразу сообщаем остальным свою новую версию
+      if (s.secret && s.deviceId && (nowSec() - s.lastHello > HELLO_EVERY || s.helloVersion !== VERSION)) await hello(false);
       await flushPending();
     }
 
@@ -234,11 +236,8 @@
       const t = await topicsOf(s);
       const filesTopic = await C.topicFor(t.group, "files");
       let r;
-      try {
-        r = await fetch(`${serverOf(s)}/${filesTopic}`, {
-          ...FO, method: "PUT", headers: { "X-Filename": "tb.bin" }, body: data
-        });
-      } catch (e) { throw netError(e); }
+      try { r = await upload(`${serverOf(s)}/${filesTopic}`, data, opts.onProgress); }
+      catch (e) { throw netError(e); }
       if (!r.ok) {
         throw new Error(r.status === 413 ? "Файл слишком большой для сервера." :
           r.status === 429 ? "Сервер временно ограничил отправку файлов — попробуйте через несколько минут." :
@@ -253,6 +252,24 @@
         { kind: opts.asText ? "text" : "file", title: opts.asText ? (opts.preview || "Текст") : n, name: n, mime, size: bytes.length },
         toIds
       );
+    }
+
+    // Загрузка на сервер. Если нужен процент выполнения и есть XMLHttpRequest (страница) — через него.
+    function upload(url, data, onProgress) {
+      if (!onProgress || typeof XMLHttpRequest === "undefined") {
+        return fetch(url, { ...FO, method: "PUT", headers: { "X-Filename": "tb.bin" }, body: data });
+      }
+      return new Promise((resolve, reject) => {
+        const x = new XMLHttpRequest();
+        x.open("PUT", url);
+        x.setRequestHeader("X-Filename", "tb.bin");
+        x.timeout = 180000;
+        x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+        x.onload = () => resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, json: async () => JSON.parse(x.responseText || "{}") });
+        x.onerror = () => reject(new TypeError("Failed to fetch"));
+        x.ontimeout = () => reject(new Error("Сервер слишком долго не отвечает — проверьте интернет и попробуйте ещё раз."));
+        x.send(data);
+      });
     }
 
     const isOurFile = (s, url) => typeof url === "string" && url.startsWith(serverOf(s) + "/file/") && url.length < 300;
@@ -376,8 +393,9 @@
             const name = String(o.f || "").slice(0, 60) || "Устройство";
             const dk = KINDS.includes(o.kind) ? o.kind : (prev && prev.kind) || "";
             if (!prev && !o.r) needReply = true;
-            if (!prev || prev.name !== name || prev.kind !== dk) {
-              devices.set(from, { id: from, name, kind: dk, added: prev ? prev.added : m.time, lastSeen: Math.max(m.time, (prev && prev.lastSeen) || 0) });
+            const vr = String(o.av || "").replace(/[^0-9.]/g, "").slice(0, 20);
+            if (!prev || prev.name !== name || prev.kind !== dk || (prev.vr || "") !== vr) {
+              devices.set(from, { id: from, name, kind: dk, vr, added: prev ? prev.added : m.time, lastSeen: Math.max(m.time, (prev && prev.lastSeen) || 0) });
               devicesChanged = true;
             } else touch(from, m.time);
           } else if (k === "bye") {
@@ -505,7 +523,7 @@
       const devices = s.devices.slice().sort((a, b) => (a.added || 0) - (b.added || 0));
       return {
         paired: Boolean(s.secret && s.deviceId),
-        me: { id: s.deviceId, name: s.deviceName, kind: kindOf(s) },
+        me: { id: s.deviceId, name: s.deviceName, kind: kindOf(s), version: VERSION },
         devices,                     // все устройства группы (для списка «Мои устройства»)
         targets: targetsOf(s, devices), // куда можно отправлять
         history: s.history, sent: s.sent, lastTargets: s.lastTargets,
@@ -625,5 +643,19 @@
     };
   }
 
-  g.TBCore = { create, randId };
+  // Сравнить версии «3.5.0» и «3.10» (по числам)
+  function cmpVersion(a, b) {
+    const x = String(a || "").split(".").map(Number), y = String(b || "").split(".").map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d) return d > 0 ? 1 : -1;
+    }
+    return 0;
+  }
+  // Расширение на компьютере старше 3.5 (тогда версия не передаётся вовсе) —
+  // текст и картинки могут не доходить или идти долго: стоит обновить.
+  const MIN_PC_VERSION = "3.5.0";
+  const pcOutdated = (d) => Boolean(d) && d.kind === "pc" && (!d.vr || cmpVersion(d.vr, MIN_PC_VERSION) < 0);
+
+  g.TBCore = { create, randId, cmpVersion, pcOutdated, MIN_PC_VERSION };
 })(globalThis);

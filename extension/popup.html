@@ -52,6 +52,8 @@
     .compose-row { display: flex; gap: 6px; margin-top: 6px; }
     .compose-row select { flex: 1; min-width: 0; font: inherit; font-size: 13px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
     .compose-row .primary { flex: 1; }
+    .full-row { display: block; font-size: 12px; margin-top: 6px; color: var(--muted, #888); }
+    .full-row[hidden] { display: none; }
     .attach-info { font-size: 13px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 </head>
@@ -71,6 +73,7 @@
       <summary>✏️ Отправить текст или картинку</summary>
       <textarea id="composeText" rows="3" placeholder="Напишите текст или вставьте скриншот (Ctrl+V)"></textarea>
       <div class="attach-info" id="attachInfo" hidden>🖼 <span id="attachName"></span> <button class="link" id="attachClear">убрать</button></div>
+      <label class="full-row" id="fullRow" hidden><input type="checkbox" id="fullQuality"> Без сжатия (исходное качество, дольше)</label>
       <div class="compose-row">
         <button id="attachBtn" title="Выбрать файл или картинку">📎 Файл</button>
         <select id="composeTo" hidden aria-label="Куда отправить"></select>
@@ -96,6 +99,7 @@
   <div class="muted small-note" id="hint" hidden>Можно отправлять сразу по клику на значок, без этого окна — <button class="link" id="hintLink">включить в настройках</button></div>
   <div class="muted small-note" id="last"></div>
 
+  <script src="shrink.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

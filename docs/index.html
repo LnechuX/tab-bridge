@@ -124,6 +124,7 @@
         </button>
         <input type="file" id="photoInput" class="vh" accept="image/*" multiple tabindex="-1" aria-hidden="true">
         <div class="thumbs" id="thumbs"></div>
+        <label class="check full-q" id="fullQualityRow" hidden><input type="checkbox" id="fullQuality"> Исходное качество (отправка дольше)</label>
         <button id="photoSend" class="primary hero-btn" hidden>
           <span class="hb-main" id="photoSendMain">Отправить</span>
           <span class="hb-sub" id="photoTarget"></span>
@@ -145,6 +146,7 @@
       <div class="sent-done" id="sentDone" hidden>
         <div class="sd-icon">✓</div>
         <div class="sd-text" id="sentDoneText"></div>
+        <div class="warn small" id="sentDoneWarn" hidden>На компьютере старая версия расширения — может не дойти. Обновите Tab Bridge на компьютере (нужна 3.5 или новее).</div>
       </div>
     </div>
 
@@ -318,6 +320,7 @@
       <button id="forget" class="danger">Отключить этот телефон</button>
       <p class="muted small">Телефон исчезнет из списка на остальных устройствах. С телефона удалятся ключ, история и все полученные файлы.</p>
     </div>
+    <p class="muted small center" id="appVersion"></p>
   </section>
 </main>
 
@@ -356,6 +359,7 @@
 <script src="tb-core.js"></script>
 <script src="blobstore.js"></script>
 <script src="shared.js"></script>
+<script src="shrink.js"></script>
 <script src="lib/jsQR.js"></script>
 <script src="app.js"></script>
 </body>

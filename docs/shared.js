@@ -5,6 +5,7 @@
 (function (g) {
   "use strict";
 
+  const VERSION = "3.5.0";                 // версия приложения на телефоне
   const DEFAULT_SERVER = "https://ntfy.sh";
   const NTFY_VAPID = "BEMjM0sNxh41x0a6Lz3YaqkJ7AUhZefxsOQgw-at69i0fM1CybVBcj7-QQXf4N_tPCgFnOXdRbQ5jrSrr9Yg9Lc";
   const FETCH_OPTS = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
@@ -44,7 +45,7 @@
 
   // Полученные файлы хранятся внутри приложения; до 150 МБ — лишнее удаляется само
   const FILES_LIMIT = 150 * 1024 * 1024;
-  const core = g.TBCore.create({ kv: KV, kind: "phone", defaultServer: DEFAULT_SERVER, blobs: g.TBBlobs || null, maxBytes: FILES_LIMIT });
+  const core = g.TBCore.create({ kv: KV, kind: "phone", defaultServer: DEFAULT_SERVER, blobs: g.TBBlobs || null, maxBytes: FILES_LIMIT, version: VERSION });
 
   async function server() { return cleanUrl(await KV.get("server", DEFAULT_SERVER)) || DEFAULT_SERVER; }
 
@@ -180,6 +181,6 @@
   g.KV = KV;
   g.TB = {
     core, push: { register, unregister }, wipe, server, DEFAULT_SERVER, cleanUrl,
-    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick
+    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick, VERSION
   };
 })(self);
