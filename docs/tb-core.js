@@ -28,7 +28,7 @@
   function create({ kv, kind, defaultServer = "https://ntfy.sh" }) {
     const FO = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
     const DEF = {
-      secret: "", server: defaultServer, deviceId: "", deviceName: "",
+      secret: "", server: defaultServer, deviceId: "", deviceName: "", kind: "",
       startTs: 0, sinceTs: 0, seen: [], nonces: [],
       devices: [], removed: [], history: [], sent: [],
       lastHello: 0, lastTargets: [], pendingBye: []
@@ -45,6 +45,19 @@
     }
 
     const serverOf = (s) => cleanUrl(s.server) || defaultServer;
+    // «sender» — устройство только для отправки (Safari на iPhone для быстрой кнопки):
+    // ему ничего не присылают, и в списках получателей его нет.
+    const KINDS = ["pc", "phone", "sender"];
+    const kindOf = (s) => (KINDS.includes(s.kind) ? s.kind : kind);
+    const receivers = (list) => list.filter((d) => d.kind !== "sender");
+    // Куда отправляет это устройство. Safari на iPhone («sender») шлёт на компьютеры:
+    // отправлять с iPhone на приложение того же iPhone незачем. Если компьютеров нет — на всех.
+    function targetsOf(s, list) {
+      const r = receivers(list);
+      if (kindOf(s) !== "sender") return r;
+      const pcs = r.filter((d) => d.kind !== "phone");
+      return pcs.length ? pcs : r;
+    }
 
     async function topicsOf(s) {
       const group = await C.deriveGroup(s.secret);
@@ -67,13 +80,15 @@
     // ---------- подключение ----------
 
     // Подключить это устройство к группе (новый id, чистая история). Сообщает о себе остальным.
-    async function pair(secret, server, name) {
+    // opts.kind = "sender" — подключить только для отправки.
+    async function pair(secret, server, name, opts = {}) {
       const now = nowSec();
       await kv.setMany({
         secret: C.normalizeSecret(secret), server: cleanUrl(server) || defaultServer,
         deviceId: randId(12), deviceName: String(name || "").slice(0, 40) || "Устройство",
         startTs: now, sinceTs: 0, seen: [], nonces: [], devices: [], removed: [],
-        history: [], sent: [], lastHello: 0, lastTargets: [], pendingBye: []
+        history: [], sent: [], lastHello: 0, lastTargets: [], pendingBye: [],
+        kind: KINDS.includes(opts.kind) ? opts.kind : ""
       });
       try { await hello(false); } catch {}
     }
@@ -81,7 +96,7 @@
     async function hello(reply) {
       const s = await load();
       if (!s.secret || !s.deviceId) return;
-      await control(s, { k: "hello", f: s.deviceName, kind, r: reply ? 1 : 0 });
+      await control(s, { k: "hello", f: s.deviceName, kind: kindOf(s), r: reply ? 1 : 0 });
       await kv.setMany({ lastHello: nowSec() });
     }
 
@@ -137,8 +152,8 @@
     async function sendLink(url, title, toIds) {
       if (!C.isSafeUrl(url)) throw new Error("Эту страницу передать нельзя — поддерживаются только http/https-ссылки.");
       const s = await load();
-      const known = new Map(s.devices.map((d) => [d.id, d]));
-      const targets = (toIds && toIds.length ? toIds : s.devices.map((d) => d.id)).filter((id) => known.has(id));
+      const known = new Map(targetsOf(s, s.devices).map((d) => [d.id, d]));
+      const targets = (toIds && toIds.length ? toIds : [...known.keys()]).filter((id) => known.has(id));
       if (!targets.length) throw new Error("Нет подключённых устройств. Сначала подключите телефон.");
       const t = await topicsOf(s);
       const i = randId(12);
@@ -240,7 +255,7 @@
             if (removed.has(from)) continue;
             const prev = devices.get(from);
             const name = String(o.f || "").slice(0, 60) || "Устройство";
-            const dk = o.kind === "phone" || o.kind === "pc" ? o.kind : (prev && prev.kind) || "";
+            const dk = KINDS.includes(o.kind) ? o.kind : (prev && prev.kind) || "";
             if (!prev && !o.r) needReply = true;
             if (!prev || prev.name !== name || prev.kind !== dk) {
               devices.set(from, { id: from, name, kind: dk, added: prev ? prev.added : m.time, lastSeen: Math.max(m.time, (prev && prev.lastSeen) || 0) });
@@ -336,10 +351,12 @@
 
     async function info() {
       const s = await load();
+      const devices = s.devices.slice().sort((a, b) => (a.added || 0) - (b.added || 0));
       return {
         paired: Boolean(s.secret && s.deviceId),
-        me: { id: s.deviceId, name: s.deviceName, kind },
-        devices: s.devices.slice().sort((a, b) => (a.added || 0) - (b.added || 0)),
+        me: { id: s.deviceId, name: s.deviceName, kind: kindOf(s) },
+        devices,                     // все устройства группы (для списка «Мои устройства»)
+        targets: targetsOf(s, devices), // куда можно отправлять
         history: s.history, sent: s.sent, lastTargets: s.lastTargets,
         server: serverOf(s), secret: s.secret
       };

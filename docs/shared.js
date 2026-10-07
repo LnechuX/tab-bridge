@@ -147,9 +147,35 @@
     return url;
   }
 
+  // ---------- быстрая отправка (закладка «📤 На ПК» и Быстрая команда) ----------
+  // Ссылка передаётся странице send.html во фрагменте адреса (#...): эта часть
+  // никогда не уходит в сеть — ни на GitHub, ни куда-либо ещё.
+  const appBase = () => g.location.origin + g.location.pathname.replace(/[^/]*$/, "");
+  const quick = {
+    sendPage: () => appBase() + "send.html",
+    // Код закладки: берёт адрес и заголовок открытой страницы и переходит на send.html.
+    bookmarklet: () =>
+      "javascript:(function(){location.href=" + JSON.stringify(appBase() + "send.html#r=back&t=").replace(/"/g, "'") +
+      "+encodeURIComponent(document.title.slice(0,200))+'&u='+encodeURIComponent(location.href)})()",
+    // Начало адреса для Быстрой команды (дальше команда подставляет закодированную ссылку).
+    shortcutPrefix: (ios16) => (ios16 ? "" : "x-safari-") + appBase() + "send.html#u=",
+    // Разобрать фрагмент send.html: { url, title, back }
+    parse(hash) {
+      const h = String(hash || "").replace(/^#/, "");
+      const at = h.startsWith("u=") ? 0 : h.indexOf("&u=") + 1;
+      const head = at > 0 ? h.slice(0, at - 1) : at === 0 ? "" : h;
+      const p = new URLSearchParams(head);
+      let raw = at >= 0 ? h.slice(at + 2) : "";
+      // Быстрая команда может прислать ссылку как закодированной, так и «как есть»
+      if (!/^https?:\/\//i.test(raw)) { try { raw = decodeURIComponent(raw); } catch {} }
+      const url = g.TBCrypto.extractUrl(raw) || (g.TBCrypto.isSafeUrl(raw) ? raw : "");
+      return { url, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back" };
+    }
+  };
+
   g.KV = KV;
   g.TB = {
     core, push: { register, unregister }, wipe, server, DEFAULT_SERVER, cleanUrl,
-    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID
+    openTarget, OPEN_MODES, defaultOpenMode, IS_IOS, IS_ANDROID, quick
   };
 })(self);

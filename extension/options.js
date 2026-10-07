@@ -15,7 +15,7 @@ async function call(msg) {
   catch (e) { return { ok: false, error: String(e?.message || e) }; }
 }
 
-const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : "🔹");
+const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : k === "sender" ? "📤" : "🔹");
 function ago(sec) {
   if (!sec) return "";
   const d = Math.max(0, Math.floor(Date.now() / 1000 - sec));
@@ -38,7 +38,8 @@ async function renderDevices() {
     const g = document.createElement("div"); g.className = "grow";
     const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = d.name;
     if (isMe) { const y = document.createElement("span"); y.className = "you"; y.textContent = "этот компьютер"; nm.append(y); }
-    const m = document.createElement("div"); m.className = "muted"; m.textContent = isMe ? "" : ago(d.lastSeen);
+    const m = document.createElement("div"); m.className = "muted";
+    m.textContent = isMe ? "" : [d.kind === "sender" ? "только отправка (быстрая кнопка)" : "", ago(d.lastSeen)].filter(Boolean).join(" · ");
     g.append(nm, m);
     div.append(ic, g);
     if (!isMe) {
@@ -57,8 +58,8 @@ async function renderDevices() {
   };
   row({ ...r.me, kind: "pc" }, true);
   r.devices.forEach((d) => row(d, false));
-  $("noDevices").hidden = r.devices.length > 0;
-  renderButtonSettings(r.devices);
+  $("noDevices").hidden = r.targets.length > 0;
+  renderButtonSettings(r.targets);
 }
 
 // ---------- этот компьютер ----------

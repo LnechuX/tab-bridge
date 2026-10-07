@@ -14,7 +14,7 @@ async function call(msg) {
 
 function status(text, cls = "") { $("status").textContent = text; $("status").className = cls; }
 
-const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : "🔹");
+const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : k === "sender" ? "📤" : "🔹");
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
 
 function ago(sec) {
@@ -49,7 +49,7 @@ function renderTargets() {
   $("pageTitle").textContent = info.tab.title || info.tab.url;
   $("pageHost").textContent = host(info.tab.url);
 
-  if (!info.devices.length) {
+  if (!info.targets.length) {
     const d = el("div", "empty-box");
     d.append(el("p", "muted", "Телефон ещё не подключён."));
     const b = el("button", "primary", "Подключить телефон");
@@ -65,12 +65,12 @@ function renderTargets() {
     b.addEventListener("click", () => send(ids, b));
     return b;
   };
-  if (info.devices.length === 1) {
-    const d = info.devices[0];
+  if (info.targets.length === 1) {
+    const d = info.targets[0];
     box.append(mk(`Отправить на «${d.name}»`, icon(d.kind), [d.id], true));
   } else {
-    for (const d of info.devices) box.append(mk(d.name, icon(d.kind), [d.id], false));
-    const all = el("button", "primary all", `Отправить на все устройства (${info.devices.length})`);
+    for (const d of info.targets) box.append(mk(d.name, icon(d.kind), [d.id], false));
+    const all = el("button", "primary all", `Отправить на все устройства (${info.targets.length})`);
     all.addEventListener("click", () => send([], all));
     box.append(all);
   }
@@ -146,7 +146,7 @@ async function refresh() {
   else $("last").textContent = "";
   $("warn").hidden = !info.lastWarning;
   $("warnText").textContent = info.lastWarning || "";
-  $("hint").hidden = FULL || info.clickMode === "instant" || !info.devices.length;
+  $("hint").hidden = FULL || info.clickMode === "instant" || !info.targets.length;
 }
 
 $("tabSent").addEventListener("click", () => { view = "sent"; renderList(); });

@@ -107,7 +107,7 @@ async function applyClickMode() {
 // Куда отправлять без выбора: настройка quickTarget = "last" | "all" | id устройства
 async function quickTargets() {
   const i = await core.info();
-  const ids = new Set(i.devices.map((d) => d.id));
+  const ids = new Set(i.targets.map((d) => d.id));
   const { quickTarget = "last" } = await api.storage.local.get("quickTarget");
   if (quickTarget === "all") return [];
   if (quickTarget !== "last" && ids.has(quickTarget)) return [quickTarget];
@@ -117,7 +117,7 @@ async function quickTargets() {
 // В режиме «сразу» клик по значку приходит сюда (в режиме окна браузер открывает окно сам)
 api.action.onClicked.addListener(async (tab) => {
   const i = await core.info().catch(() => null);
-  if (i && !i.devices.length) return api.runtime.openOptionsPage();
+  if (i && !i.targets.length) return api.runtime.openOptionsPage();
   sendWithFeedback(async () => sendActive(await quickTargets(), tab));
 });
 
@@ -229,7 +229,7 @@ async function setupMenus() {
   if (!api.contextMenus) return;
   try {
     await api.contextMenus.removeAll();
-    const { devices } = await core.info();
+    const { targets: devices } = await core.info();
     for (const [ctx, what] of [["page", "вкладку"], ["link", "ссылку"]]) {
       if (!devices.length) {
         api.contextMenus.create({ id: `tb-${ctx}|none`, title: `Отправить ${what} — сначала подключите телефон`, contexts: [ctx] });

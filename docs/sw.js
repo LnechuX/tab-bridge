@@ -4,7 +4,7 @@
 // 2) Позволяет установить страницу на главный экран и попасть в меню «Поделиться».
 importScripts("tb-crypto.js", "tb-core.js", "shared.js");
 
-const CACHE = "tab-bridge-v5";
+const CACHE = "tab-bridge-v6";
 const ICON = "icons/icon-192.png";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -14,16 +14,23 @@ self.addEventListener("activate", (e) => e.waitUntil((async () => {
 })()));
 
 // Всегда свежая версия из сети, кэш — только запасной вариант без интернета.
+// Важно для приватности: параметры адреса (?url=…&text=… из «Поделиться» на Android)
+// НЕ уходят в сеть — страницу запрашиваем без них, а сама страница читает их локально.
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
+  const clean = url.origin + url.pathname;
+  const netReq = url.search
+    ? new Request(clean, { credentials: "omit", cache: "no-store", redirect: "follow" })
+    : e.request;
   e.respondWith(
-    fetch(e.request)
+    fetch(netReq)
       .then((r) => {
-        if (r.ok && !url.search) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
+        if (r.ok && !r.redirected) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(clean, copy)); }
+        if (r.redirected && e.request.mode === "navigate") return Response.redirect(r.url, 302);
         return r;
       })
-      .catch(() => caches.match(e.request, { ignoreSearch: true }))
+      .catch(() => caches.match(clean))
   );
 });
 

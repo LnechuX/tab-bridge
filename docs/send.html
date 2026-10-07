@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https: wss:; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#2563eb">
+  <title>Tab Bridge — отправка</title>
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="send-page">
+<main>
+  <div class="send-box" id="box">
+    <div class="send-icon" id="icon">⏳</div>
+    <div class="send-title" id="title">Отправляю…</div>
+    <div class="send-sub" id="sub"></div>
+    <div class="send-link" id="link"></div>
+    <div class="targets" id="targets"></div>
+    <label class="check send-remember" id="rememberRow" hidden><input type="checkbox" id="remember"> Запомнить и больше не спрашивать</label>
+    <div class="send-actions" id="actions"></div>
+  </div>
+</main>
+<script src="tb-crypto.js"></script>
+<script src="tb-core.js"></script>
+<script src="shared.js"></script>
+<script src="send.js"></script>
+</body>
+</html>

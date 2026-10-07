@@ -20,7 +20,7 @@
   const pushSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
   const guessName = () => /iPhone/i.test(ua) ? "iPhone" : /iPad/i.test(ua) ? "iPad" : /Android/i.test(ua) ? "Android" : "Телефон";
 
-  const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : "🔹");
+  const icon = (k) => (k === "phone" ? "📱" : k === "pc" ? "💻" : k === "sender" ? "📤" : "🔹");
   const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function setMsg(node, text, cls = "muted") { node.textContent = text; node.className = "msg " + cls; }
@@ -46,11 +46,12 @@
   // ---------- что пришло в адресе ----------
   // Ключ из QR-кода — во фрагменте (#k=...), который браузер не отправляет на сервер. Сразу стираем его.
   const frag = new URLSearchParams(location.hash.slice(1));
-  const incoming = { secret: frag.get("k") || "", server: frag.get("s") || "" };
+  const incoming = { secret: frag.get("k") || "", server: frag.get("s") || "", fromApp: frag.get("sender") === "1" };
   let openId = frag.get("o") || "";   // открыть ссылку (пришли из уведомления)
   const q = new URLSearchParams(location.search);
   let sharedUrl = C.extractUrl([q.get("url"), q.get("text"), q.get("title")].filter(Boolean).join(" "));
   const sharedTitle = q.get("title") || "";
+  const wantClip = q.get("a") === "clip";   // ярлык «Отправить скопированную ссылку» (Android)
   if (location.hash || location.search) history.replaceState(null, "", location.pathname);
 
   const swReady = "serviceWorker" in navigator
@@ -60,8 +61,10 @@
   const paired = async () => Boolean(await KV.get("secret", "")) && Boolean(await KV.get("deviceId", ""));
 
   // ---------- экраны ----------
+  let lastScreen = "app";
   function show(id) {
-    for (const s of ["install", "setup", "app", "settings"]) $(s).hidden = s !== id;
+    if (id !== "quick") lastScreen = id;
+    for (const s of ["install", "setup", "app", "settings", "quick"]) $(s).hidden = s !== id;
     $("openSettings").hidden = id !== "app";
     if (id !== "app") stopLive();
   }
@@ -81,10 +84,16 @@
   async function showApp() {
     show("app");
     const i = await core.info();
+    const sender = i.me.kind === "sender";
     $("meLine").textContent = `🔒 ${i.me.name} · сквозное шифрование`;
+    $("senderCard").hidden = !sender;
+    $("tabRecv").hidden = sender;
+    if (sender) view = "sent";
+    $("quickBanner").hidden = !(isIOS && isStandalone && !(await KV.get("quickBannerHidden", false)));
     await render();
-    await renderPush();
+    if (sender) $("pushCard").hidden = true; else await renderPush();
     startLive();
+    flushPendingSend();
   }
 
   // ---------- подключение ----------
@@ -106,6 +115,27 @@
     setTimeout(() => poll(), 2500); // компьютер отвечает «привет» — подтягиваем его в список
     maybeSendShared();
   }
+
+  // Safari на iPhone, открытый по QR-коду (или кнопкой из приложения), подключается сам —
+  // только для отправки. Получать вкладки будет приложение на экране «Домой».
+  async function pairSafariSender(secret, server) {
+    const s = C.normalizeSecret(secret);
+    if (C.checkSecret(s)) return false;
+    const srv = TB.cleanUrl(server) || TB.DEFAULT_SERVER;
+    const same = (await paired()) && C.normalizeSecret(await KV.get("secret", "")) === s && (await TB.server()) === srv;
+    if (!same) {
+      if (await paired()) await TB.wipe(null, true);
+      await core.pair(s, srv, "Safari · " + guessName(), { kind: "sender" });
+      try { await navigator.storage?.persist?.(); } catch {}
+    }
+    return true;
+  }
+
+  async function showInstall() {
+    show("install");
+    $("installDone").hidden = !incoming.fromApp;
+  }
+  $("installQuick").addEventListener("click", () => showQuick());
 
   $("saveSetup").addEventListener("click", () => connect(C.normalizeSecret($("secret").value), $("server").value));
   $("pairHere").addEventListener("click", () => showSetup());
@@ -163,7 +193,7 @@
       const r = parseCode(code.data);
       if (!r) { $("scanMsg").textContent = "Это не код Tab Bridge. Откройте на компьютере «Показать QR-код»."; return; }
       stopScan();
-      if (navigator.vibrate) try { navigator.vibrate(80); } catch {}
+      if (navigator.vibrate && navigator.userActivation?.hasBeenActive) try { navigator.vibrate(80); } catch {}
       connect(r.secret, r.server);
     }, 200);
   });
@@ -281,7 +311,7 @@
   function renderTargets(i) {
     const box = $("targets");
     box.textContent = "";
-    if (!i.devices.length) {
+    if (!i.targets.length) {
       box.append(el("div", "muted", "Компьютер появится здесь через несколько секунд после подключения. Если его нет — откройте на компьютере браузер."));
       return;
     }
@@ -291,10 +321,10 @@
       b.addEventListener("click", () => doSend(ids, b));
       return b;
     };
-    if (i.devices.length === 1) box.append(mk(`Отправить на «${i.devices[0].name}»`, icon(i.devices[0].kind), [i.devices[0].id], true));
+    if (i.targets.length === 1) box.append(mk(`Отправить на «${i.targets[0].name}»`, icon(i.targets[0].kind), [i.targets[0].id], true));
     else {
-      for (const d of i.devices) box.append(mk(d.name, icon(d.kind), [d.id], false));
-      const all = el("button", "primary all", `На все устройства (${i.devices.length})`);
+      for (const d of i.targets) box.append(mk(d.name, icon(d.kind), [d.id], false));
+      const all = el("button", "primary all", `На все устройства (${i.targets.length})`);
       all.addEventListener("click", () => doSend([], all));
       box.append(all);
     }
@@ -357,9 +387,10 @@
       const div = el("div", "dev");
       const g = el("div", "grow");
       const nm = el("div", "nm", d.name);
-      if (isMe) nm.append(el("span", "you", "этот телефон"));
-      g.append(nm, el("div", "muted small", isMe ? "" : (d.lastSeen ? "в сети " + ago(d.lastSeen) : "")));
-      div.append(el("span", "ic", icon(isMe ? "phone" : d.kind)), g);
+      if (isMe) nm.append(el("span", "you", d.kind === "sender" ? "этот Safari" : "этот телефон"));
+      const meta = [d.kind === "sender" ? "только отправка" : "", !isMe && d.lastSeen ? "в сети " + ago(d.lastSeen) : ""].filter(Boolean).join(" · ");
+      g.append(nm, el("div", "muted small", meta));
+      div.append(el("span", "ic", icon(isMe && d.kind !== "sender" ? "phone" : d.kind)), g);
       if (!isMe) {
         const b = el("button", "", "Удалить");
         b.addEventListener("click", async () => {
@@ -409,16 +440,59 @@
     catch { setMsg($("sendMsg"), "Браузер не дал доступ к буферу — вставьте ссылку вручную.", "err"); }
   });
 
-  // «Поделиться» на Android: одно устройство — отправляем сразу, несколько — даём выбрать
+  // Куда отправлять без вопросов: один получатель — ему; иначе настройка «Быстрая отправка».
+  // null — нужно спросить.
+  async function quickIds(i) {
+    const t = i.targets;
+    if (t.length === 1) return [t[0].id];
+    if (!t.length) return null;
+    const qt = await KV.get("quickTarget", "ask");
+    if (qt === "all") return [];
+    if (t.some((d) => d.id === qt)) return [qt];
+    return null;
+  }
+
+  // Отправить ссылку быстро: сразу, если ясно куда; иначе подставить в поле и попросить выбрать.
+  async function quickSend(u, title, after) {
+    const i = await core.info();
+    $("url").value = u;
+    const ids = await quickIds(i);
+    if (ids) { await doSend(ids, null, u, title); if (after) after(); }
+    else if (i.targets.length) setMsg($("sendMsg"), "Выберите, куда отправить ссылку.");
+    else setMsg($("sendMsg"), "Компьютер ещё не появился в списке — подождите несколько секунд и нажмите «Отправить».", "err");
+  }
+
+  // «📋 Отправить скопированную ссылку»
+  $("clipSend").addEventListener("click", () => {
+    // буфер нужно прочитать сразу по нажатию — иначе iPhone не даст доступ
+    const p = navigator.clipboard?.readText ? navigator.clipboard.readText() : Promise.reject(new Error("нет доступа"));
+    p.then((t) => {
+      const u = C.extractUrl(t);
+      if (!u) return setMsg($("sendMsg"), "В буфере нет ссылки. Скопируйте ссылку (Поделиться → Скопировать) и нажмите ещё раз.", "err");
+      quickSend(u, "");
+    }, () => setMsg($("sendMsg"), "Нет доступа к буферу. Нажмите «Вставить», когда iPhone спросит, или вставьте ссылку вручную.", "err"));
+  });
+
+  // «Поделиться» на Android: после успешной отправки приложение пробует закрыться само
   async function maybeSendShared() {
     if (!sharedUrl || !(await paired())) return;
     const u = sharedUrl;
     sharedUrl = "";
+    quickSend(u, sharedTitle, () => {
+      if (/Отправлено/.test($("sendMsg").textContent)) setTimeout(() => { try { window.close(); } catch {} }, 1200);
+    });
+  }
+
+  // Ссылка, которую пытались отправить из ещё не подключённого браузера (send.html)
+  let pendingTries = 0;
+  async function flushPendingSend() {
+    const p = await KV.get("pendingSend", null);
+    if (!p || !p.u) return;
+    if (Date.now() - (p.ts || 0) > 30 * 60 * 1000 || !C.isSafeUrl(p.u)) { await KV.set("pendingSend", null); return; }
     const i = await core.info();
-    $("url").value = u;
-    if (i.devices.length === 1) doSend([i.devices[0].id], null, u, sharedTitle);
-    else if (i.devices.length > 1) setMsg($("sendMsg"), "Выберите, куда отправить ссылку.");
-    else setMsg($("sendMsg"), "Компьютер ещё не появился в списке — подождите несколько секунд и нажмите «Отправить».", "err");
+    if (!i.targets.length && pendingTries++ < 6) { setTimeout(async () => { await poll(); flushPendingSend(); }, 2500); return; }
+    await KV.set("pendingSend", null);
+    quickSend(p.u, p.t || "");
   }
 
   // ---------- настройки ----------
@@ -430,8 +504,25 @@
     for (const [m, label] of TB.OPEN_MODES) { const o = el("option", "", label); o.value = m; sel.append(o); }
     sel.value = await openMode();
     renderOpenHint();
+    const i = await core.info();
+    const qs = $("quickTarget");
+    qs.textContent = "";
+    const addOpt = (v, t) => { const o = el("option", "", t); o.value = v; qs.append(o); };
+    addOpt("ask", i.targets.length > 1 ? "Спрашивать, куда отправить" : "Сразу на единственное устройство");
+    if (i.targets.length > 1) {
+      addOpt("all", "На все устройства");
+      for (const d of i.targets) addOpt(d.id, `Только на «${d.name}»`);
+    }
+    const qv = await KV.get("quickTarget", "ask");
+    qs.value = [...qs.options].some((o) => o.value === qv) ? qv : "ask";
+    $("openInBlock").hidden = i.me.kind === "sender";
     setMsg($("settingsMsg"), "");
   });
+  $("quickTarget").addEventListener("change", async () => {
+    await KV.set("quickTarget", $("quickTarget").value);
+    setMsg($("settingsMsg"), "Сохранено ✓", "ok");
+  });
+  $("openQuick").addEventListener("click", () => showQuick());
   function renderOpenHint() {
     const m = $("openIn").value;
     $("openHint").textContent =
@@ -461,6 +552,55 @@
     await showSetup("Телефон отключён. Чтобы подключить снова — отсканируйте QR-код.");
   });
 
+  // ---------- экран «Быстрая отправка» ----------
+  let safariLink = "";
+  async function showQuick() {
+    const wasPaired = await paired();
+    show("quick");
+    const inSafari = isIOS && !isStandalone;
+    $("qSafari").hidden = !isIOS;
+    $("qBookmark").hidden = !isIOS;
+    $("qShortcut").hidden = !isIOS;
+    $("qAndroid").hidden = !TB.IS_ANDROID;
+    $("linkSafari").hidden = inSafari;
+    $("linkSafariNote").hidden = inSafari;
+    $("safariIsOk").hidden = !inSafari;
+    $("quickIntro").textContent = isIOS
+      ? "Два способа отправить открытую страницу на компьютер в 2 касания. Можно настроить оба — потом оставите удобный."
+      : TB.IS_ANDROID ? "На Android быстрее всего через «Поделиться»." : "Откройте эту страницу на телефоне.";
+    $("bookmarkletCode").value = TB.quick.bookmarklet();
+    // ссылка для Safari готовится заранее: переход должен случиться сразу по нажатию
+    safariLink = "";
+    if (wasPaired && isStandalone) {
+      const secret = C.normalizeSecret(await KV.get("secret", ""));
+      const srv = await TB.server();
+      safariLink = "x-safari-" + TB.quick.sendPage().replace(/send\.html$/, "") +
+        "#k=" + secret + (srv !== TB.DEFAULT_SERVER ? "&s=" + encodeURIComponent(srv) : "") + "&sender=1";
+    }
+    setMsg($("quickMsg"), "");
+    window.scrollTo(0, 0);
+  }
+  $("closeQuick").addEventListener("click", async () => {
+    if (lastScreen === "settings") $("openSettings").click();
+    else if (lastScreen === "install") showInstall();
+    else if (await paired()) showApp();
+    else showSetup();
+  });
+  $("linkSafari").addEventListener("click", () => {
+    if (safariLink) location.href = safariLink;
+    else setMsg($("quickMsg"), "Сначала подключите это приложение по QR-коду.", "err");
+  });
+  async function copy(text, okText) {
+    try { await navigator.clipboard.writeText(text); setMsg($("quickMsg"), okText, "ok"); }
+    catch { setMsg($("quickMsg"), "Не удалось скопировать — скопируйте вручную.", "err"); }
+  }
+  $("copyBookmarklet").addEventListener("click", () => copy(TB.quick.bookmarklet(), "✓ Код кнопки скопирован. Теперь шаги ниже — в Safari."));
+  $("copyShortcut").addEventListener("click", () => copy(TB.quick.shortcutPrefix(false), "✓ Адрес скопирован. Теперь шаги ниже — в приложении «Команды»."));
+  $("copyShortcut16").addEventListener("click", () => copy(TB.quick.shortcutPrefix(true), "✓ Адрес для iOS 16 скопирован."));
+  $("quickBannerGo").addEventListener("click", () => showQuick());
+  $("quickBannerHide").addEventListener("click", () => { $("quickBanner").hidden = true; KV.set("quickBannerHidden", true); });
+  $("senderQuick").addEventListener("click", () => showQuick());
+
   // ---------- обновление, пока открыто ----------
   async function onResult(r) {
     if (!r) return;
@@ -469,7 +609,7 @@
       return showSetup("Этот телефон удалили из списка на другом устройстве. Чтобы подключить снова — отсканируйте QR-код.");
     }
     if (r.clockSkew) setMsg($("state"), "Часы телефона или компьютера расходятся больше чем на 10 минут — проверьте дату и время.", "err small");
-    if (r.fresh.length && navigator.vibrate) try { navigator.vibrate(60); } catch {}
+    if (r.fresh.length && navigator.vibrate && navigator.userActivation?.hasBeenActive) try { navigator.vibrate(60); } catch {}
     if (r.fresh.length || r.devicesChanged || r.sentChanged) render();
   }
 
@@ -526,13 +666,19 @@
   }
 
   // ---------- запуск ----------
-  if (await paired() && !incoming.secret) {
+  if (incoming.secret && isIOS && !isStandalone) {
+    // Safari на iPhone открыли по QR-коду или кнопкой из приложения
+    if (await pairSafariSender(incoming.secret, incoming.server)) {
+      incoming.secret = ""; incoming.server = "";
+      await showInstall();
+      setTimeout(async () => { try { await core.poll(); } catch {} flushPendingSend(); }, 2500);
+    } else await showSetup();
+  } else if (await paired() && !incoming.secret) {
     await showApp();
     if (openId) { const id = openId; openId = ""; openById(id); }
+    if (wantClip) { $("clipSend").classList.add("pulse"); $("clipSend").focus(); }
     refreshPush();
     maybeSendShared();
-  } else if (isIOS && !isStandalone && incoming.secret) {
-    show("install");
   } else {
     await showSetup();
   }

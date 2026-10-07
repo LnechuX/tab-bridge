@@ -25,17 +25,23 @@
     <button id="openSettings" class="ghost" hidden>Настройки</button>
   </header>
 
-  <!-- iPhone в Safari: сначала на экран «Домой» -->
+  <!-- iPhone в Safari: Safari подключён для быстрой отправки; для получения — на экран «Домой» -->
   <section id="install" hidden>
+    <div class="card ok-card" id="safariOk">
+      <h2>✓ Safari подключён для быстрой отправки</h2>
+      <p class="muted">Осталось добавить кнопку «📤 На ПК» — это делается один раз.</p>
+      <button id="installQuick" class="primary wide">Настроить кнопку «📤 На ПК»</button>
+    </div>
     <div class="card">
-      <h2>Установите Tab Bridge на экран «Домой»</h2>
-      <p class="muted">На iPhone уведомления работают только у приложений с экрана «Домой», и у них отдельная от Safari память. Поэтому подключаемся уже в приложении:</p>
+      <h2>📲 Чтобы получать вкладки с компьютера</h2>
+      <p class="muted">Уведомления на iPhone работают только у приложений с экрана «Домой». Установите Tab Bridge:</p>
       <ol class="steps">
         <li>Нажмите <b>«Поделиться»</b> <span class="sym">⎙</span> внизу экрана.</li>
         <li>Выберите <b>«На экран „Домой“»</b> → «Добавить».</li>
-        <li>Откройте <b>Tab Bridge</b> с экрана «Домой» и нажмите <b>«Сканировать QR-код»</b> — наведите на код на компьютере.</li>
+        <li>Откройте <b>Tab Bridge</b> с экрана «Домой» → <b>«Сканировать QR-код»</b> → наведите на тот же код на компьютере.</li>
       </ol>
-      <button id="pairHere" class="link mt">Подключить прямо здесь, в Safari (без уведомлений)</button>
+      <p class="muted small" id="installDone" hidden>Уже установлено? Тогда здесь больше ничего делать не нужно.</p>
+      <button id="pairHere" class="link mt">Получать вкладки прямо в Safari (без уведомлений)</button>
     </div>
   </section>
 
@@ -70,6 +76,20 @@
       </div>
     </div>
 
+    <div class="card quick-banner" id="quickBanner" hidden>
+      <div class="qb-text"><b>⚡ Отправляйте с iPhone в 2 касания</b><br><span class="muted small">Кнопка «📤 На ПК» в Safari и «На ПК» в меню «Поделиться»</span></div>
+      <div class="row">
+        <button id="quickBannerGo" class="primary">Настроить</button>
+        <button id="quickBannerHide">Не сейчас</button>
+      </div>
+    </div>
+
+    <div class="card" id="senderCard" hidden>
+      <h2>📤 Safari — только для отправки</h2>
+      <p class="muted">Отсюда работают кнопка «📤 На ПК» и Быстрая команда. Присланные вкладки приходят в приложение Tab Bridge на экране «Домой».</p>
+      <button id="senderQuick" class="wide">Настроить быструю отправку</button>
+    </div>
+
     <div class="card push" id="pushCard" hidden>
       <h2>🔔 Уведомления о новых вкладках</h2>
       <p class="muted" id="pushText"></p>
@@ -79,7 +99,8 @@
 
     <div class="card">
       <h2>Отправить</h2>
-      <div class="urlrow">
+      <button id="clipSend" class="primary big clip">📋 Отправить скопированную ссылку</button>
+      <div class="urlrow mt">
         <input id="url" type="url" inputmode="url" placeholder="Ссылка https://…" autocomplete="off">
         <button id="paste">Вставить</button>
       </div>
@@ -106,18 +127,99 @@
     </div>
   </section>
 
+  <!-- Быстрая отправка -->
+  <section id="quick" hidden>
+    <div class="card">
+      <h2>⚡ Быстрая отправка</h2>
+      <p class="muted" id="quickIntro"></p>
+      <button id="closeQuick" class="link">← Назад</button>
+    </div>
+
+    <!-- iPhone: шаг 1 — подключить Safari -->
+    <div class="card step" id="qSafari" hidden>
+      <div class="step-n">1</div>
+      <h2>Подключите Safari</h2>
+      <p class="muted">У Safari своя память, отдельная от приложения, поэтому его нужно подключить один раз. Он будет только отправлять — в списке получателей его не будет.</p>
+      <button id="linkSafari" class="primary wide">Открыть и подключить Safari</button>
+      <p class="muted small" id="linkSafariNote">Если Safari не открылся (так бывает на iOS 16): наведите камеру iPhone на QR-код в настройках Tab Bridge на компьютере — Safari подключится сам.</p>
+      <p class="ok small" id="safariIsOk" hidden>✓ Это и есть Safari — он подключён.</p>
+    </div>
+
+    <!-- iPhone: кнопка-закладка -->
+    <div class="card step" id="qBookmark" hidden>
+      <div class="step-n" id="qBookmarkN">2</div>
+      <h2>Кнопка «📤 На ПК» в Safari</h2>
+      <p class="muted">Потом на любом сайте: нажмите адресную строку → «📤 На ПК». Страница уйдёт на компьютер, и вы сразу вернётесь назад.</p>
+      <button id="copyBookmarklet" class="primary wide">📋 Скопировать код кнопки</button>
+      <p class="muted small mt6">Затем в Safari:</p>
+      <ol class="steps">
+        <li>В Safari на любой странице: <b>«Поделиться»</b> <span class="sym">⎙</span> → <b>«Добавить в Избранное»</b> → «Сохранить».</li>
+        <li>Откройте закладки <span class="sym">📖</span> → «Избранное» → <b>«Изменить»</b> → нажмите на новую закладку.</li>
+        <li>Название: <b>📤 На ПК</b>. В поле адреса удалите всё и <b>вставьте скопированный код</b> → «Готово».</li>
+      </ol>
+      <details class="mt">
+        <summary>Показать код</summary>
+        <textarea id="bookmarkletCode" class="code" readonly rows="4"></textarea>
+      </details>
+    </div>
+
+    <!-- iPhone: Быстрая команда -->
+    <div class="card step" id="qShortcut" hidden>
+      <div class="step-n" id="qShortcutN">3</div>
+      <h2>«На ПК» в меню «Поделиться»</h2>
+      <p class="muted">Работает в любом приложении: YouTube, Telegram, Яндекс, Safari. Делается в приложении «Команды» за 2 минуты.</p>
+      <button id="copyShortcut" class="primary wide">📋 Скопировать адрес для команды</button>
+      <p class="muted small mt6">Затем:</p>
+      <ol class="steps">
+        <li>Откройте <b>«Команды»</b> → <b>«+»</b>. Сверху нажмите на название → «Переименовать» → <b>На ПК</b>.</li>
+        <li>Нажмите <b>ⓘ</b> внизу → включите <b>«Показывать в Общем доступе»</b> (на iOS 18 — «Показывать в меню „Поделиться“»).</li>
+        <li>В блоке «Получить… из Общего доступа» выберите типы <b>URL</b>, <b>Веб-страницы Safari</b> и <b>Текст</b>. «Если нет входных данных» → <b>«Получить буфер обмена»</b>.</li>
+        <li>Добавьте действие <b>«Получить URL-адреса из ввода»</b>.</li>
+        <li>Добавьте действие <b>«Закодировать URL»</b>.</li>
+        <li>Добавьте действие <b>«Открыть URL-адреса»</b>, нажмите в поле адреса, <b>вставьте скопированное</b> и сразу за ним выберите переменную <b>«Закодированный URL»</b>. Готово.</li>
+      </ol>
+      <p class="muted small">Бонус: «Настройки» → «Универсальный доступ» → «Касание» → «Коснуться сзади» → «Двойное касание» → <b>На ПК</b>. Тогда скопированная ссылка уходит на компьютер двумя постукиваниями по задней крышке.</p>
+      <details class="mt">
+        <summary>У меня iOS 16</summary>
+        <p class="muted small">На iOS 16 используйте этот адрес (тогда браузером по умолчанию должен быть Safari):</p>
+        <button id="copyShortcut16" class="wide">Скопировать адрес для iOS 16</button>
+      </details>
+    </div>
+
+    <!-- Android -->
+    <div class="card step" id="qAndroid" hidden>
+      <h2>«Поделиться» → Tab Bridge</h2>
+      <ol class="steps">
+        <li>Установите Tab Bridge на главный экран: меню <b>⋮</b> → <b>«Установить приложение»</b>.</li>
+        <li>В любом приложении: <b>«Поделиться»</b> → <b>Tab Bridge</b>. Ссылка уйдёт сразу, если получатель один (или выбран в настройках).</li>
+      </ol>
+      <p class="muted small">Ещё: долгое нажатие на значок Tab Bridge → «Отправить скопированную ссылку».</p>
+    </div>
+
+    <div class="card">
+      <h2>📋 Из буфера</h2>
+      <p class="muted">Скопировали ссылку → откройте Tab Bridge → «📋 Отправить скопированную ссылку». iPhone попросит разрешить вставку — нажмите «Вставить».</p>
+    </div>
+    <div id="quickMsg" class="msg" role="status"></div>
+  </section>
+
   <!-- Настройки -->
   <section id="settings" hidden>
     <div class="card">
       <h2>Настройки</h2>
       <label for="myName">Название этого телефона</label>
       <input id="myName" type="text" maxlength="40">
-      <label for="openIn">Открывать присланные ссылки в</label>
-      <div class="urlrow">
-        <select id="openIn"></select>
-        <button id="testOpen">Проверить</button>
+      <div id="openInBlock">
+        <label for="openIn">Открывать присланные ссылки в</label>
+        <div class="urlrow">
+          <select id="openIn"></select>
+          <button id="testOpen">Проверить</button>
+        </div>
+        <p class="muted small" id="openHint"></p>
       </div>
-      <p class="muted small" id="openHint"></p>
+      <label for="quickTarget">Быстрая отправка (кнопка, «Поделиться», из буфера)</label>
+      <select id="quickTarget"></select>
+      <button id="openQuick" class="wide mt">⚡ Настроить быструю отправку</button>
       <div class="row">
         <button id="saveName" class="primary">Сохранить</button>
         <button id="closeSettings">Назад</button>
