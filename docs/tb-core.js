@@ -729,7 +729,7 @@
   }
   // Расширение на компьютере старше 3.5 (тогда версия не передаётся вовсе) —
   // текст и картинки могут не доходить или идти долго: стоит обновить.
-  const MIN_PC_VERSION = "3.5.0";
+  const MIN_PC_VERSION = "3.6.0";
   const pcOutdated = (d) => Boolean(d) && d.kind === "pc" && (!d.vr || cmpVersion(d.vr, MIN_PC_VERSION) < 0);
 
   g.TBCore = { create, randId, cmpVersion, pcOutdated, MIN_PC_VERSION };

@@ -160,7 +160,9 @@ async function renderQr() {
   const qr = qrcode(0, "M");
   qr.addData(text);
   qr.make();
-  $("qr").innerHTML = qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+  // SVG разбираем как XML-документ (без innerHTML): в нём только квадратики QR-кода
+  const svg = new DOMParser().parseFromString(qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true }), "image/svg+xml").documentElement;
+  $("qr").replaceChildren(document.importNode(svg, true));
   return true;
 }
 
@@ -249,3 +251,11 @@ if (location.hash === "#welcome") {
 }
 load().then(renderDevices).then(renderMemory);
 api.storage.onChanged.addListener((ch) => { if (ch.devices) renderDevices(); });
+
+// ---------- документы и версия ----------
+{
+  const base = (cleanUrl(CFG.phoneUrl) || "https://lnechux.github.io/tab-bridge").replace(/\/?$/, "/");
+  $("privacyLink").href = base + "privacy.html";
+  $("termsLink").href = base + "terms.html";
+  $("extVersion").textContent = api.runtime.getManifest().version;
+}

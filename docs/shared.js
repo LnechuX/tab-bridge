@@ -5,7 +5,7 @@
 (function (g) {
   "use strict";
 
-  const VERSION = "3.5.0";                 // версия приложения на телефоне
+  const VERSION = "3.6.0";                 // версия приложения на телефоне
   const DEFAULT_SERVER = "https://ntfy.sh";
   const NTFY_VAPID = "BEMjM0sNxh41x0a6Lz3YaqkJ7AUhZefxsOQgw-at69i0fM1CybVBcj7-QQXf4N_tPCgFnOXdRbQ5jrSrr9Yg9Lc";
   const FETCH_OPTS = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" };
