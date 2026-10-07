@@ -223,3 +223,33 @@ textarea.code { width: 100%; font: 12px/1.4 ui-monospace, Menlo, Consolas, monos
 .expert summary { color: var(--muted); }
 .expert textarea { margin-top: 8px; }
 button:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
+/* ---------- вкладки «Ссылку / Скриншот / Текст» ---------- */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--bg); margin-bottom: 16px; }
+.seg button { border: 0; background: none; padding: 9px 4px; border-radius: 9px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.seg button[aria-selected="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.vh { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pick { width: 100%; min-height: 128px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 2px dashed color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--card)); border-radius: 16px; }
+.pick-icon { font-size: 34px; }
+.pick-main { font-size: 17px; font-weight: 700; color: var(--accent); }
+.pick-sub { font-size: 13px; color: var(--muted); }
+.thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+.thumbs:empty { display: none; }
+.thumb { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb button { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; border: 0; font-size: 14px; line-height: 1; }
+#textInput { width: 100%; font: inherit; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); resize: vertical; min-height: 120px; }
+/* полученные картинки и текст в списке */
+li.recv .rthumb { flex: none; width: 46px; height: 46px; border-radius: 8px; object-fit: cover; background: var(--bg); border: 1px solid var(--line); }
+li.recv .rk { flex: none; width: 46px; height: 46px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 22px; background: var(--bg); }
+li.recv .err-t { color: var(--err); }
+/* просмотр */
+.viewer { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column; padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+.viewer-top { display: flex; align-items: center; gap: 10px; }
+.viewer-head { flex: 1; min-width: 0; }
+.viewer-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-body { flex: 1; min-height: 0; overflow: auto; margin: 12px 0; display: flex; align-items: flex-start; justify-content: center; }
+.viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; align-self: center; }
+.viewer-body pre { width: 100%; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.viewer-actions { display: grid; gap: 8px; }
+li.recv a.recv-row { display: flex; align-items: center; gap: 12px; }
+li.recv a.recv-row .grow { flex: 1; min-width: 0; }

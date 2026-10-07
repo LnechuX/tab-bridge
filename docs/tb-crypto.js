@@ -21,6 +21,10 @@
   const MAX_BODY = 2600;      // чтобы сообщение влезло в лимит ntfy (4096 байт)
   const MAX_URL = 2400;
   const SALT = "tab-bridge/v2";
+  // Файлы (скриншоты, длинный текст): свой случайный ключ на каждый файл,
+  // размер округляется вверх до 64 КБ, чтобы сервер не видел точный размер.
+  const FILE_PAD = 64 * 1024;
+  const MAX_FILE = 14 * 1024 * 1024;   // после шифрования влезает в лимит ntfy.sh (15 МБ)
 
   const enc = new TextEncoder();
   const dec = new TextDecoder();
@@ -191,6 +195,36 @@
     return r;
   }
 
+  async function sealFile(bytes) {
+    if (!(bytes instanceof Uint8Array)) bytes = new Uint8Array(bytes);
+    if (bytes.length > MAX_FILE) throw new Error("Файл больше 14 МБ — такой не отправить.");
+    const total = Math.ceil((bytes.length + 4) / FILE_PAD) * FILE_PAD;
+    const pt = new Uint8Array(total);
+    new DataView(pt.buffer).setUint32(0, bytes.length);
+    pt.set(bytes, 4);
+    const raw = g.crypto.getRandomValues(new Uint8Array(32));
+    const key = await subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
+    const iv = g.crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv }, key, pt));
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv);
+    out.set(ct, 12);
+    return { data: out, key: toB64(raw) };
+  }
+
+  async function openFile(data, keyB64) {
+    if (!(data instanceof Uint8Array)) data = new Uint8Array(data);
+    const raw = fromB64(String(keyB64 || ""));
+    if (raw.length !== 32 || data.length < 12 + 16 + 4) throw new Error("Файл повреждён.");
+    const key = await subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+    let pt;
+    try { pt = new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: data.subarray(0, 12) }, key, data.subarray(12))); }
+    catch { throw new Error("Файл повреждён или подменён."); }
+    const len = new DataView(pt.buffer, pt.byteOffset).getUint32(0);
+    if (len > pt.length - 4) throw new Error("Файл повреждён.");
+    return pt.slice(4, 4 + len);
+  }
+
   // Найти ссылку в произвольном тексте (для «Поделиться» на телефоне).
   function extractUrl(text) {
     const m = String(text || "").match(/https?:\/\/[^\s<>"']+/i);
@@ -201,6 +235,7 @@
   g.TBCrypto = Object.freeze({
     generateSecret, normalizeSecret, checkSecret, formatSecret,
     deriveGroup, sealLink, openLink, isSafeUrl, extractUrl, topicFor, seal, open,
+    sealFile, openFile, MAX_FILE,
     MAX_CLOCK_SKEW: 600 // сек: допустимое расхождение времени отправителя и сервера
   });
 })(globalThis);

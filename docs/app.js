@@ -52,6 +52,7 @@
   let sharedUrl = C.extractUrl([q.get("url"), q.get("text"), q.get("title")].filter(Boolean).join(" "));
   const sharedTitle = q.get("title") || "";
   const wantClip = q.get("a") === "clip";   // ярлык «Отправить скопированную ссылку» (Android)
+  let wantShared = q.get("shared") === "1";  // «Поделиться» картинкой/текстом на Android
   if (location.hash || location.search) history.replaceState(null, "", location.pathname);
 
   const swReady = "serviceWorker" in navigator
@@ -262,6 +263,7 @@
   async function openById(id) {
     const h = (await core.info()).history.find((x) => x.id === id);
     if (!h) return;
+    if (h.kind === "text" || h.kind === "file") return showViewer(id);
     pendingOpen = h;
     $("openTitle").textContent = h.title || h.url;
     $("openGo").textContent = currentMode === "app" || currentMode === "default" ? "Открыть" : `Открыть в ${modeName(currentMode)}`;
@@ -320,9 +322,10 @@
   async function renderClipTarget(i) {
     const ids = await quickIds(i);
     const t = i.targets;
-    $("clipTarget").textContent = !t.length ? "" :
+    const label = !t.length ? "" :
       ids && ids.length === 1 ? `на «${(t.find((d) => d.id === ids[0]) || {}).name}»` :
       ids ? "на все устройства" : "вы выберете, на какое устройство";
+    for (const id of ["clipTarget", "photoTarget", "textTarget"]) $(id).textContent = label;
   }
 
   function renderTargets(i) {
@@ -347,7 +350,116 @@
     }
   }
 
+  // ---------- полученные текст и картинки ----------
+  const IMAGE = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const isImage = (h) => h.kind === "file" && IMAGE.includes(h.file?.mime);
+  let thumbUrls = [];
+  function recvItem(it) {
+    const li = el("li", "recv" + (it.opened ? "" : " unread"));
+    const a = el("a");
+    a.href = "#";
+    let pic;
+    if (isImage(it) && it.status === "ok") {
+      pic = el("img", "rthumb");
+      pic.alt = "";
+      core.getFile(it.id).then((b) => { if (b) { const u = URL.createObjectURL(b); thumbUrls.push(u); pic.src = u; } });
+    } else pic = el("span", "rk", it.kind === "text" ? "✏️" : it.status === "error" ? "⚠️" : it.kind === "file" && !isImage(it) ? "📎" : "🖼");
+    const state = it.status === "loading" ? "скачивается…" : it.status === "error" ? "не скачан — нажмите, чтобы повторить" : it.opened ? "открыто" : "";
+    const body = el("span", "grow");
+    body.append(el("span", "t" + (it.status === "error" ? " err-t" : ""), it.kind === "text" ? (it.title || "Текст") : it.title),
+      el("span", "m", [it.from ? `от «${it.from}»` : "", ago(it.time), state].filter(Boolean).join(" · ")));
+    a.append(pic, body);
+    a.classList.add("recv-row");
+    a.addEventListener("click", (e) => { e.preventDefault(); showViewer(it.id); });
+    li.append(a);
+    return li;
+  }
+
+  function vbtn(label, fn, primary) {
+    const b = el("button", primary ? "primary" : "", label);
+    b.addEventListener("click", fn);
+    $("viewerActions").append(b);
+    return b;
+  }
+  let viewerUrl = null;
+  function closeViewer() {
+    $("viewer").hidden = true;
+    $("viewerBody").textContent = "";
+    if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; }
+  }
+  $("viewerClose").addEventListener("click", closeViewer);
+
+  async function showViewer(id) {
+    const h = (await core.info()).history.find((x) => x.id === id);
+    if (!h) return;
+    closeViewer();
+    $("viewer").hidden = false;
+    $("viewerActions").textContent = "";
+    setMsg($("viewerMsg"), "");
+    $("viewerTitle").textContent = h.kind === "text" ? "Текст" : h.title;
+    $("viewerMeta").textContent = [h.from ? `от «${h.from}»` : "", ago(h.time)].filter(Boolean).join(", ");
+    if (h.status === "loading") { setMsg($("viewerMsg"), "Скачиваю…"); setTimeout(() => showViewer(id), 800); return; }
+    if (h.status === "error") {
+      setMsg($("viewerMsg"), h.error || "Не удалось скачать.", "err");
+      vbtn("Повторить", async () => { setMsg($("viewerMsg"), "Скачиваю…"); await core.fetchFile(id); render(); showViewer(id); }, true);
+      return;
+    }
+    core.markOpened(id).then(render).catch(() => {});
+    if (h.kind === "text") {
+      const pre = el("pre", "", h.text || "");
+      $("viewerBody").append(pre);
+      vbtn("📋 Скопировать текст", async () => {
+        try { await navigator.clipboard.writeText(h.text || ""); setMsg($("viewerMsg"), "✓ Скопировано", "ok"); }
+        catch { setMsg($("viewerMsg"), "Не удалось скопировать — выделите текст и скопируйте.", "err"); }
+      }, true);
+      const links = C.extractUrl(h.text || "");
+      if (links) vbtn("Открыть ссылку из текста", () => openLink({ id: h.id, url: links }));
+      return;
+    }
+    const blob = await core.getFile(id);
+    if (!blob) return setMsg($("viewerMsg"), "Файл не найден на телефоне (история была очищена).", "err");
+    const file = new File([blob], h.file.name, { type: blob.type });
+    if (isImage(h)) {
+      viewerUrl = URL.createObjectURL(blob);
+      const img = el("img");
+      img.src = viewerUrl;
+      img.alt = h.title;
+      $("viewerBody").append(img);
+    } else {
+      $("viewerBody").append(el("p", "muted center", "Этот файл можно только сохранить."));
+    }
+    // «Сохранить»: на iPhone/Android — через меню «Поделиться» (там «Сохранить изображение»)
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      vbtn(isImage(h) ? "Сохранить в «Фото» или поделиться" : "Сохранить или поделиться", async () => {
+        try { await navigator.share({ files: [file] }); } catch (e) { if (e?.name !== "AbortError") setMsg($("viewerMsg"), "Не удалось открыть меню «Поделиться».", "err"); }
+      }, true);
+    } else {
+      vbtn("Скачать", () => {
+        const a = el("a"); a.href = URL.createObjectURL(blob); a.download = h.file.name;
+        document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      }, true);
+    }
+    if (isImage(h) && window.ClipboardItem && navigator.clipboard?.write) {
+      vbtn("📋 Скопировать картинку", async () => {
+        try {
+          const png = blob.type === "image/png" ? blob : await toPng(blob);
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+          setMsg($("viewerMsg"), "✓ Скопировано", "ok");
+        } catch { setMsg($("viewerMsg"), "Не удалось скопировать.", "err"); }
+      });
+    }
+  }
+  async function toPng(blob) {
+    const bmp = await createImageBitmap(blob);
+    const c = document.createElement("canvas");
+    c.width = bmp.width; c.height = bmp.height;
+    c.getContext("2d").drawImage(bmp, 0, 0);
+    return new Promise((r) => c.toBlob(r, "image/png"));
+  }
+
   function renderList(i) {
+    thumbUrls.forEach((u) => URL.revokeObjectURL(u));
+    thumbUrls = [];
     $("tabRecv").classList.toggle("on", view === "recv");
     $("tabSent").classList.toggle("on", view === "sent");
     const list = $("list");
@@ -360,6 +472,7 @@
     $("clear").hidden = !(i.history.length || i.sent.length);
     for (const it of items.slice(0, 30)) {
       if (view === "recv") {
+        if (it.kind === "text" || it.kind === "file") { list.append(recvItem(it)); continue; }
         if (!C.isSafeUrl(it.url)) continue;
         const li = el("li", "recv" + (it.opened ? "" : " unread")), a = el("a");
         a.href = it.url; a.rel = "noopener noreferrer";
@@ -373,7 +486,8 @@
         list.append(li);
       } else {
         const li = el("li", "sent");
-        li.append(el("span", "t", it.title || it.url));
+        const ki = it.kind === "text" ? "✏️ " : it.kind === "file" ? "🖼 " : "";
+        li.append(el("span", "t", ki + (it.title || it.url)));
         const m = el("span", "m");
         it.to.forEach((t, n) => {
           if (n) m.append(document.createTextNode(", "));
@@ -428,40 +542,36 @@
   $("tabSent").addEventListener("click", async () => { view = "sent"; renderList(await core.info()); });
   $("clear").addEventListener("click", async () => { await core.clearHistory(); render(); });
 
-  // ---------- отправка ----------
+  // ---------- отправка: общее для ссылок, скриншотов и текста ----------
   let busy = false;
   let doneTimer = null;
-  async function doSend(ids, btn, presetUrl, presetTitle) {
-    if (busy) return;
-    const raw = presetUrl || $("url").value;
-    const u = C.extractUrl(raw) || (C.isSafeUrl(raw.trim()) ? raw.trim() : "");
-    if (!u) return setMsg($("sendMsg"), "Вставьте ссылку, начинающуюся с https:// или http://", "err");
+
+  // Выполнить отправку с индикацией. job(ids) → запись «Отправлено» (или массив записей).
+  async function runSend(ids, job, btn, busyText) {
+    if (busy) return false;
     busy = true;
     if (btn) btn.disabled = true;
     $("sentDone").hidden = true;
-    setMsg($("sendMsg"), "Отправляю…");
+    setMsg($("sendMsg"), busyText || "Отправляю…");
     try {
-      const e = await core.sendLink(u, presetTitle || "", ids);
+      const res = await job(ids, (t) => setMsg($("sendMsg"), t));
+      const e = Array.isArray(res) ? res[res.length - 1] : res;
       setMsg($("sendMsg"), "");
       $("sentDoneText").textContent = "Отправлено на " + e.to.filter((x) => x.s !== "failed").map((x) => `«${x.name}»`).join(", ");
       $("sentDone").hidden = false;
       clearTimeout(doneTimer);
       doneTimer = setTimeout(() => { $("sentDone").hidden = true; }, 8000);
-      $("url").value = "";
       view = "sent";
       render();
+      return true;
     } catch (e) {
       setMsg($("sendMsg"), String(e?.message || e), "err");
+      return false;
     } finally {
       busy = false;
       if (btn) btn.disabled = false;
     }
   }
-
-  $("paste").addEventListener("click", async () => {
-    try { const t = await navigator.clipboard.readText(); $("url").value = C.extractUrl(t) || t.trim(); }
-    catch { setMsg($("sendMsg"), "Браузер не дал доступ к буферу — вставьте ссылку вручную.", "err"); }
-  });
 
   // Куда отправлять без вопросов: один получатель — ему; иначе настройка «Быстрая отправка».
   // null — нужно спросить.
@@ -476,9 +586,9 @@
   }
 
   // Спросить, куда отправить (нижнее меню со списком устройств). Возвращает ids или null.
-  function chooseTargets(i, u) {
+  function chooseTargets(i, what) {
     return new Promise((resolve) => {
-      $("sheetTitle").textContent = "Куда отправить? " + hostOf(u);
+      $("sheetTitle").textContent = "Куда отправить" + (what ? " " + what : "") + "?";
       const box = $("sheetActions");
       box.textContent = "";
       const pick = (ids) => { hideSheet(); resolve(ids); };
@@ -495,51 +605,206 @@
     });
   }
 
-  // Отправить ссылку быстро: сразу, если ясно куда; иначе спросить.
-  async function quickSend(u, title, after) {
+  // Определить получателей: сразу или спросить. null — отмена / некуда.
+  async function pickTargets(what) {
     const i = await core.info();
     if (!i.targets.length) {
-      $("url").value = u;
-      $("manualSend").open = true;
-      return setMsg($("sendMsg"), "Компьютер ещё не появился в списке. Откройте на компьютере браузер и попробуйте через несколько секунд.", "err");
+      setMsg($("sendMsg"), "Компьютер ещё не появился в списке. Откройте на компьютере браузер и попробуйте через несколько секунд.", "err");
+      return null;
     }
-    const ids = (await quickIds(i)) ?? (await chooseTargets(i, u));
-    if (!ids) return;
-    await doSend(ids, null, u, title);
-    if (after) after();
+    return (await quickIds(i)) ?? (await chooseTargets(i, what));
   }
 
-  // «📋 Отправить скопированную ссылку»
+  // --- ссылки ---
+  async function doSend(ids, btn, presetUrl, presetTitle) {
+    const raw = presetUrl || $("url").value;
+    const u = C.extractUrl(raw) || (C.isSafeUrl(raw.trim()) ? raw.trim() : "");
+    if (!u) return setMsg($("sendMsg"), "Вставьте ссылку, начинающуюся с https:// или http://", "err");
+    const ok = await runSend(ids, (to) => core.sendLink(u, presetTitle || "", to), btn);
+    if (ok) $("url").value = "";
+    return ok;
+  }
+
+  $("paste").addEventListener("click", async () => {
+    try { const t = await navigator.clipboard.readText(); $("url").value = C.extractUrl(t) || t.trim(); }
+    catch { setMsg($("sendMsg"), "Браузер не дал доступ к буферу — вставьте ссылку вручную.", "err"); }
+  });
+
+  async function quickSend(u, title, after) {
+    const ids = await pickTargets(hostOf(u));
+    if (!ids) { $("url").value = u; $("manualSend").open = true; return; }
+    const ok = await doSend(ids, null, u, title);
+    if (ok && after) after();
+  }
+
+  // «📋 Вставить и отправить»: ссылка — отправляем; просто текст — открываем «Текст»; картинка — «Скриншот»
   $("clipSend").addEventListener("click", () => {
     // буфер нужно прочитать сразу по нажатию — иначе iPhone не даст доступ
     const p = navigator.clipboard?.readText ? navigator.clipboard.readText() : Promise.reject(new Error("нет доступа"));
-    p.then((t) => {
+    p.then(async (t) => {
       const u = C.extractUrl(t);
-      if (!u) return setMsg($("sendMsg"), "Сначала скопируйте ссылку: «Поделиться» → «Скопировать». Потом нажмите кнопку ещё раз.", "err");
-      quickSend(u, "");
-    }, () => setMsg($("sendMsg"), "Не удалось вставить. Когда iPhone спросит «Вставить?», нажмите «Вставить».", "err"));
+      if (u) return quickSend(u, "");
+      if (String(t || "").trim()) {
+        setPane("text");
+        $("textInput").value = t;
+        return setMsg($("sendMsg"), "В буфере текст, а не ссылка. Проверьте его и нажмите «Отправить текст».");
+      }
+      if (await pasteImage(true)) return;
+      setMsg($("sendMsg"), "Сначала скопируйте ссылку: «Поделиться» → «Скопировать». Потом нажмите кнопку ещё раз.", "err");
+    }, async () => {
+      if (await pasteImage(true)) return;
+      setMsg($("sendMsg"), "Не удалось вставить. Когда iPhone спросит «Вставить?», нажмите «Вставить».", "err");
+    });
+  });
+
+  // --- вкладки ---
+  function setPane(name) {
+    for (const [seg, pane, n] of [["segLink", "paneLink", "link"], ["segPhoto", "panePhoto", "photo"], ["segText", "paneText", "text"]]) {
+      $(seg).setAttribute("aria-selected", String(n === name));
+      $(pane).hidden = n !== name;
+    }
+    setMsg($("sendMsg"), "");
+    $("sentDone").hidden = true;
+  }
+  $("segLink").addEventListener("click", () => setPane("link"));
+  $("segPhoto").addEventListener("click", () => setPane("photo"));
+  $("segText").addEventListener("click", () => { setPane("text"); $("textInput").focus(); });
+
+  // --- скриншоты и фото ---
+  let photos = [];                               // [{ blob, name, url }]
+  const MAX_PHOTOS = 10;
+  function renderPhotos() {
+    const box = $("thumbs");
+    box.textContent = "";
+    photos.forEach((p, n) => {
+      const d = el("div", "thumb");
+      const img = el("img");
+      img.src = p.url;
+      img.alt = p.name;
+      const x = el("button", "", "✕");
+      x.setAttribute("aria-label", "Убрать " + p.name);
+      x.addEventListener("click", () => { URL.revokeObjectURL(p.url); photos.splice(n, 1); renderPhotos(); });
+      d.append(img, x);
+      box.append(d);
+    });
+    $("photoSend").hidden = !photos.length;
+    $("photoSendMain").textContent = photos.length > 1 ? `Отправить ${photos.length} картинки` : "Отправить картинку";
+  }
+  function addPhotos(list) {
+    for (const f of list) {
+      if (!/^image\//.test(f.type || "")) { setMsg($("sendMsg"), `«${f.name || "файл"}» — не картинка.`, "err"); continue; }
+      if (f.size > C.MAX_FILE) { setMsg($("sendMsg"), `«${f.name || "картинка"}» больше 14 МБ — такую не отправить.`, "err"); continue; }
+      if (photos.length >= MAX_PHOTOS) { setMsg($("sendMsg"), `За раз — не больше ${MAX_PHOTOS} картинок.`, "err"); break; }
+      const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+      const name = f.name && !/^image\.\w+$/i.test(f.name) ? f.name : `Скриншот ${new Date().toLocaleString().replace(/[/:]/g, "-")}.${ext}`;
+      photos.push({ blob: f, name, url: URL.createObjectURL(f) });
+    }
+    renderPhotos();
+  }
+  $("photoPick").addEventListener("click", () => $("photoInput").click());
+  $("photoInput").addEventListener("change", () => { addPhotos([...$("photoInput").files]); $("photoInput").value = ""; });
+
+  // Вставить картинку из буфера. quiet — не ругаться, если картинки нет.
+  async function pasteImage(quiet) {
+    try {
+      if (!navigator.clipboard?.read) throw new Error("no");
+      const items = await navigator.clipboard.read();
+      for (const it of items) {
+        const type = it.types.find((t) => /^image\//.test(t));
+        if (type) {
+          const blob = await it.getType(type);
+          setPane("photo");
+          addPhotos([new File([blob], "image." + (type.split("/")[1] || "png"), { type })]);
+          return true;
+        }
+      }
+    } catch {}
+    if (!quiet) setMsg($("sendMsg"), "В буфере нет картинки. Скопируйте скриншот: миниатюра → ⎙ → «Скопировать».", "err");
+    return false;
+  }
+  $("photoPaste").addEventListener("click", () => pasteImage(false));
+
+  async function sendPhotos() {
+    if (!photos.length) return false;
+    const ids = await pickTargets(photos.length > 1 ? "картинки" : "картинку");
+    if (!ids) return false;
+    const list = photos.slice();
+    const ok = await runSend(ids, async (to, progress) => {
+      const out = [];
+      for (let n = 0; n < list.length; n++) {
+        progress(list.length > 1 ? `Отправляю ${n + 1} из ${list.length}…` : "Шифрую и отправляю…");
+        out.push(await core.sendFile(list[n].blob, list[n].name, to));
+        URL.revokeObjectURL(list[n].url);
+        photos = photos.filter((p) => p !== list[n]);
+        renderPhotos();
+      }
+      return out;
+    }, $("photoSend"), "Шифрую и отправляю…");
+    if (ok) renderPhotos();
+    return ok;
+  }
+  $("photoSend").addEventListener("click", () => sendPhotos());
+
+  // --- текст ---
+  $("textPaste").addEventListener("click", async () => {
+    try { const t = await navigator.clipboard.readText(); if (t) $("textInput").value = t; else setMsg($("sendMsg"), "Буфер пуст.", "err"); }
+    catch { setMsg($("sendMsg"), "Не удалось вставить. Когда iPhone спросит «Вставить?», нажмите «Вставить».", "err"); }
+  });
+  async function sendTextNow(text, after) {
+    const ids = await pickTargets("текст");
+    if (!ids) return false;
+    const ok = await runSend(ids, (to) => core.sendText(text, to), $("textSend"));
+    if (ok) { $("textInput").value = ""; if (after) after(); }
+    return ok;
+  }
+  $("textSend").addEventListener("click", () => {
+    const t = $("textInput").value;
+    if (!t.trim()) return setMsg($("sendMsg"), "Напишите или вставьте текст.", "err");
+    sendTextNow(t);
   });
 
   // «Поделиться» на Android: после успешной отправки приложение пробует закрыться само
+  const closeSoon = () => setTimeout(() => { try { window.close(); } catch {} }, 1200);
   async function maybeSendShared() {
-    if (!sharedUrl || !(await paired())) return;
-    const u = sharedUrl;
-    sharedUrl = "";
-    quickSend(u, sharedTitle, () => {
-      if (!$("sentDone").hidden) setTimeout(() => { try { window.close(); } catch {} }, 1200);
-    });
+    if (!(await paired())) return;
+    if (sharedUrl) {
+      const u = sharedUrl;
+      sharedUrl = "";
+      return quickSend(u, sharedTitle, closeSoon);
+    }
+    if (!wantShared) return;
+    wantShared = false;
+    const p = await KV.get("pendingShare", null);
+    await KV.set("pendingShare", null);
+    if (!p || Date.now() - (p.ts || 0) > 10 * 60 * 1000) return;
+    const files = [];
+    for (const f of p.files || []) {
+      const b = await TBBlobs.get(f.key).catch(() => null);
+      TBBlobs.del(f.key).catch(() => {});
+      if (b) files.push(new File([b], f.name || "image.png", { type: f.type || b.type }));
+    }
+    if (files.length) {
+      setPane("photo");
+      addPhotos(files);
+      // получатель известен — отправляем сразу, как и ссылки; иначе пользователь выберет
+      if ((await quickIds(await core.info())) && await sendPhotos()) closeSoon();
+      return;
+    }
+    const u = C.extractUrl([p.url, p.text, p.title].filter(Boolean).join(" "));
+    if (u) return quickSend(u, p.title || "", closeSoon);
+    if (String(p.text || "").trim()) { setPane("text"); $("textInput").value = p.text; return sendTextNow(p.text, closeSoon); }
   }
 
   // Ссылка, которую пытались отправить из ещё не подключённого браузера (send.html)
   let pendingTries = 0;
   async function flushPendingSend() {
     const p = await KV.get("pendingSend", null);
-    if (!p || !p.u) return;
-    if (Date.now() - (p.ts || 0) > 30 * 60 * 1000 || !C.isSafeUrl(p.u)) { await KV.set("pendingSend", null); return; }
+    if (!p || (!p.u && !p.x)) return;
+    if (Date.now() - (p.ts || 0) > 30 * 60 * 1000 || (p.u && !C.isSafeUrl(p.u))) { await KV.set("pendingSend", null); return; }
     const i = await core.info();
     if (!i.targets.length && pendingTries++ < 6) { setTimeout(async () => { await poll(); flushPendingSend(); }, 2500); return; }
     await KV.set("pendingSend", null);
-    quickSend(p.u, p.t || "");
+    if (p.u) quickSend(p.u, p.t || ""); else sendTextNow(p.x);
   }
 
   // ---------- настройки ----------

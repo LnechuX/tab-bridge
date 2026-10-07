@@ -46,6 +46,13 @@
     .warn-box span { flex: 1; }
     .warn-box .x { background: none; border: 0; padding: 0 2px; color: inherit; }
     .retry { margin-top: 4px; font-size: 12px; padding: 3px 8px; }
+    .compose { margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+    .compose summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+    .compose textarea { width: 100%; margin-top: 8px; font: inherit; font-size: 13px; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
+    .compose-row { display: flex; gap: 6px; margin-top: 6px; }
+    .compose-row select { flex: 1; min-width: 0; font: inherit; font-size: 13px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+    .compose-row .primary { flex: 1; }
+    .attach-info { font-size: 13px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -60,6 +67,17 @@
     <div class="page" id="page" hidden><div class="t" id="pageTitle"></div><div class="h" id="pageHost"></div></div>
     <div id="targets"></div>
     <div id="status" role="status"></div>
+    <details class="compose" id="compose">
+      <summary>✏️ Отправить текст или картинку</summary>
+      <textarea id="composeText" rows="3" placeholder="Напишите текст или вставьте скриншот (Ctrl+V)"></textarea>
+      <div class="attach-info" id="attachInfo" hidden>🖼 <span id="attachName"></span> <button class="link" id="attachClear">убрать</button></div>
+      <div class="compose-row">
+        <button id="attachBtn" title="Выбрать файл или картинку">📎 Файл</button>
+        <select id="composeTo" hidden aria-label="Куда отправить"></select>
+        <button id="composeSend" class="primary" disabled>Отправить</button>
+      </div>
+      <input type="file" id="fileInput" hidden>
+    </details>
   </div>
 
   <div class="warn-box" id="warn" hidden><span id="warnText"></span> <button class="x" id="warnClose" title="Скрыть">✕</button></div>

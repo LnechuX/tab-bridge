@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Bridge — вкладки между устройствами",
   "short_name": "Tab Bridge",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Отправляйте вкладку с ПК на телефон и обратно. Сквозное шифрование: сервер не видит ваши ссылки.",
   "permissions": [
     "storage",
@@ -26,6 +26,7 @@
       "config.js",
       "tb-crypto.js",
       "tb-core.js",
+      "blobstore.js",
       "background.js"
     ]
   },

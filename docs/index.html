@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:; connect-src https: wss:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src https: wss:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#2563eb">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -79,40 +79,73 @@
       <p class="muted">Присланные с компьютера вкладки приходят в приложение Tab Bridge на экране «Домой».</p>
     </div>
 
-    <!-- Главное действие: отправить скопированную ссылку -->
+    <!-- Главное действие: отправить на компьютер ссылку, скриншот или текст -->
     <div class="card hero" id="sendHero">
-      <h2 class="hero-title">Отправить ссылку на компьютер</h2>
-      <ol class="howto" aria-label="Как отправить">
-        <li>
-          <div class="howto-pic" aria-hidden="true">
-            <span class="ios-btn">⎙</span><span class="pic-arrow">›</span><span class="ios-row">⧉ Скопировать</span>
+      <h2 class="hero-title">Отправить на компьютер</h2>
+      <div class="seg" role="tablist" aria-label="Что отправить">
+        <button role="tab" id="segLink" aria-selected="true" aria-controls="paneLink">🔗 Ссылку</button>
+        <button role="tab" id="segPhoto" aria-selected="false" aria-controls="panePhoto">🖼 Скриншот</button>
+        <button role="tab" id="segText" aria-selected="false" aria-controls="paneText">✏️ Текст</button>
+      </div>
+
+      <div id="paneLink" role="tabpanel" aria-labelledby="segLink">
+        <ol class="howto" aria-label="Как отправить">
+          <li>
+            <div class="howto-pic" aria-hidden="true">
+              <span class="ios-btn">⎙</span><span class="pic-arrow">›</span><span class="ios-row">⧉ Скопировать</span>
+            </div>
+            <div class="howto-text">В Safari или другом приложении нажмите «Поделиться», затем «Скопировать»</div>
+          </li>
+          <li>
+            <div class="howto-pic" aria-hidden="true"><span class="mini-btn">Вставить и отправить</span></div>
+            <div class="howto-text">Вернитесь сюда и нажмите кнопку</div>
+          </li>
+        </ol>
+        <button id="clipSend" class="primary hero-btn">
+          <span class="hb-main">📋 Вставить и отправить</span>
+          <span class="hb-sub" id="clipTarget"></span>
+        </button>
+        <p class="muted small center" id="pasteHint">iPhone спросит «Вставить?» — нажмите «Вставить».</p>
+        <details class="manual-send" id="manualSend">
+          <summary>Вставить ссылку вручную</summary>
+          <div class="urlrow mt6">
+            <input id="url" type="url" inputmode="url" placeholder="https://…" autocomplete="off">
+            <button id="paste">Вставить</button>
           </div>
-          <div class="howto-text">В Safari или другом приложении нажмите «Поделиться», затем «Скопировать»</div>
-        </li>
-        <li>
-          <div class="howto-pic" aria-hidden="true"><span class="mini-btn">Вставить и отправить</span></div>
-          <div class="howto-text">Вернитесь сюда и нажмите кнопку</div>
-        </li>
-      </ol>
-      <button id="clipSend" class="primary hero-btn">
-        <span class="hb-main">📋 Вставить и отправить</span>
-        <span class="hb-sub" id="clipTarget"></span>
-      </button>
-      <p class="muted small center" id="pasteHint">iPhone спросит «Вставить?» — нажмите «Вставить».</p>
+          <div id="targets" class="targets"></div>
+        </details>
+      </div>
+
+      <div id="panePhoto" role="tabpanel" aria-labelledby="segPhoto" hidden>
+        <button id="photoPick" class="pick">
+          <span class="pick-icon" aria-hidden="true">🖼</span>
+          <span class="pick-main">Выбрать скриншот или фото</span>
+          <span class="pick-sub">из «Фото» или «Файлов», можно несколько</span>
+        </button>
+        <input type="file" id="photoInput" class="vh" accept="image/*" multiple tabindex="-1" aria-hidden="true">
+        <div class="thumbs" id="thumbs"></div>
+        <button id="photoSend" class="primary hero-btn" hidden>
+          <span class="hb-main" id="photoSendMain">Отправить</span>
+          <span class="hb-sub" id="photoTarget"></span>
+        </button>
+        <button id="photoPaste" class="wide mt6">📋 Вставить скопированную картинку</button>
+        <p class="muted small center">Только что сделали скриншот? Нажмите на миниатюру в углу экрана → ⎙ → «Скопировать», затем «Вставить скопированную картинку».</p>
+      </div>
+
+      <div id="paneText" role="tabpanel" aria-labelledby="segText" hidden>
+        <textarea id="textInput" rows="5" placeholder="Напишите или вставьте текст"></textarea>
+        <button id="textPaste" class="wide mt6">📋 Вставить скопированный текст</button>
+        <button id="textSend" class="primary hero-btn mt">
+          <span class="hb-main">Отправить текст</span>
+          <span class="hb-sub" id="textTarget"></span>
+        </button>
+      </div>
+
       <div id="sendMsg" class="msg center" role="status"></div>
       <div class="sent-done" id="sentDone" hidden>
         <div class="sd-icon">✓</div>
         <div class="sd-text" id="sentDoneText"></div>
       </div>
-
-      <details class="manual-send" id="manualSend">
-        <summary>Вставить ссылку вручную</summary>
-        <div class="urlrow mt6">
-          <input id="url" type="url" inputmode="url" placeholder="https://…" autocomplete="off">
-          <button id="paste">Вставить</button>
-        </div>
-        <div id="targets" class="targets"></div>
-      </details>
     </div>
 
     <div class="card faster" id="quickBanner" hidden>
@@ -266,6 +299,17 @@
   </section>
 </main>
 
+<!-- Просмотр присланного текста или картинки -->
+<div id="viewer" class="viewer" role="dialog" aria-modal="true" aria-labelledby="viewerTitle" hidden>
+  <div class="viewer-top">
+    <div class="viewer-head"><div class="viewer-title" id="viewerTitle"></div><div class="muted small" id="viewerMeta"></div></div>
+    <button id="viewerClose" class="ghost">Закрыть</button>
+  </div>
+  <div class="viewer-body" id="viewerBody"></div>
+  <div class="viewer-actions" id="viewerActions"></div>
+  <div class="msg center" id="viewerMsg" role="status"></div>
+</div>
+
 <!-- Меню ссылки «⋯» -->
 <div id="sheet" class="sheet-bg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
@@ -288,6 +332,7 @@
 <script src="config.js"></script>
 <script src="tb-crypto.js"></script>
 <script src="tb-core.js"></script>
+<script src="blobstore.js"></script>
 <script src="shared.js"></script>
 <script src="lib/jsQR.js"></script>
 <script src="app.js"></script>

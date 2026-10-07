@@ -42,7 +42,7 @@
     clear() { return tx("readwrite", (s) => { s.clear(); }); }
   };
 
-  const core = g.TBCore.create({ kv: KV, kind: "phone", defaultServer: DEFAULT_SERVER });
+  const core = g.TBCore.create({ kv: KV, kind: "phone", defaultServer: DEFAULT_SERVER, blobs: g.TBBlobs || null });
 
   async function server() { return cleanUrl(await KV.get("server", DEFAULT_SERVER)) || DEFAULT_SERVER; }
 
@@ -169,7 +169,8 @@
       // Быстрая команда может прислать ссылку как закодированной, так и «как есть»
       if (!/^https?:\/\//i.test(raw)) { try { raw = decodeURIComponent(raw); } catch {} }
       const url = g.TBCrypto.extractUrl(raw) || (g.TBCrypto.isSafeUrl(raw) ? raw : "");
-      return { url, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back" };
+      const text = url ? "" : String(raw || "").trim().slice(0, 200000);
+      return { url, text, title: String(p.get("t") || "").slice(0, 300), back: p.get("r") === "back" };
     }
   };
 

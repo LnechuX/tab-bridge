@@ -103,7 +103,8 @@ function renderList() {
   for (const it of items) {
     const li = el("li");
     if (view === "sent") {
-      li.append(el("span", "t", it.title || it.url));
+      const ki = it.kind === "text" ? "✏️ " : it.kind === "file" ? (/^image\//.test(it.mime || "") ? "🖼 " : "📎 ") : "";
+      li.append(el("span", "t", ki + (it.title || it.url)));
       const m = el("span", "m");
       it.to.forEach((t, n) => {
         if (n) m.append(document.createTextNode(", "));
@@ -124,10 +125,12 @@ function renderList() {
       }
     } else {
       const a = el("a");
-      a.href = it.url;
-      a.title = it.url;
-      a.append(el("span", "t", it.title || it.url),
-        el("span", "m", [it.from ? `от «${it.from}»` : "", ago(it.time), it.opened ? "открыто" : ""].filter(Boolean).join(" · ")));
+      const kindIcon = it.kind === "text" ? "✏️ " : it.kind === "file" ? (/^image\//.test(it.file?.mime || "") ? "🖼 " : "📎 ") : "";
+      a.href = it.url || "#";
+      a.title = it.url || it.title || "";
+      const state = it.status === "error" ? "не скачан" : it.status === "loading" ? "скачивается…" : it.opened ? "открыто" : "";
+      a.append(el("span", "t", kindIcon + (it.title || it.url)),
+        el("span", "m", [it.from ? `от «${it.from}»` : "", ago(it.time), state].filter(Boolean).join(" · ")));
       a.addEventListener("click", (e) => { e.preventDefault(); call({ type: "open-received", id: it.id }); });
       li.append(a);
     }
@@ -140,7 +143,7 @@ async function refresh() {
   if (!r.ok) return status(r.error || "Ошибка", "err");
   info = r;
   $("me").textContent = info.me.name || "";
-  if (!FULL) renderTargets();
+  if (!FULL) { renderTargets(); renderCompose(); }
   renderList();
   if (info.lastError) { $("last").className = "err"; $("last").textContent = "Связь: " + info.lastError; }
   else $("last").textContent = "";
@@ -164,6 +167,54 @@ $("warnClose").addEventListener("click", async () => { await call({ type: "dismi
 $("hintLink").addEventListener("click", () => { api.tabs.create({ url: api.runtime.getURL("options.html#button") }); window.close(); });
 
 // если есть непрочитанные — сразу показываем «Получено» и снимаем счётчик
+// ---------- текст или картинка на телефон ----------
+let attached = null;                         // { blob, name }
+function renderCompose() {
+  if (!info) return;
+  const t = info.targets;
+  $("composeTo").hidden = t.length < 2;
+  if (t.length >= 2 && !$("composeTo").options.length) {
+    for (const d of t) { const o = el("option", "", d.name); o.value = d.id; $("composeTo").append(o); }
+    const all = el("option", "", "Все устройства"); all.value = ""; $("composeTo").append(all);
+  }
+  $("composeSend").textContent = t.length === 1 ? `Отправить на «${t[0].name}»` : "Отправить";
+  $("composeSend").disabled = !t.length || (!attached && !$("composeText").value.trim());
+  $("attachInfo").hidden = !attached;
+  if (attached) $("attachName").textContent = attached.name;
+}
+function attach(blob, name) {
+  if (blob.size > 14 * 1024 * 1024) return status("Файл больше 14 МБ — такой не отправить.", "err");
+  attached = { blob, name };
+  renderCompose();
+}
+$("composeText").addEventListener("input", renderCompose);
+$("composeText").addEventListener("paste", (e) => {
+  const f = [...(e.clipboardData?.files || [])][0];
+  if (f) { e.preventDefault(); attach(f, f.name && f.name !== "image.png" ? f.name : `Скриншот ${new Date().toLocaleString()}.png`); }
+});
+$("attachBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", () => { const f = $("fileInput").files[0]; if (f) attach(f, f.name); $("fileInput").value = ""; });
+$("attachClear").addEventListener("click", () => { attached = null; renderCompose(); });
+function toBase64(buf) {
+  const b = new Uint8Array(buf); let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+$("composeSend").addEventListener("click", async () => {
+  const to = info.targets.length >= 2 && $("composeTo").value ? [$("composeTo").value] : [];
+  $("composeSend").disabled = true;
+  status(attached ? "Шифрую и отправляю файл…" : "Шифрую и отправляю…", "muted");
+  const r = attached
+    ? await call({ type: "send-file", data: toBase64(await attached.blob.arrayBuffer()), mime: attached.blob.type, name: attached.name, to })
+    : await call({ type: "send-text", text: $("composeText").value, to });
+  if (r.ok) {
+    status("✓ Отправлено на " + r.entry.to.map((x) => `«${x.name}»`).join(", "), "ok");
+    attached = null; $("composeText").value = "";
+    view = "sent"; await refresh();
+  } else status(r.error || "Не получилось отправить", "err");
+  renderCompose();
+});
+
 refresh().then(async () => {
   if (info && info.history.some((h) => !h.opened && !h.read)) {
     view = "recv";

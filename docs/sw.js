@@ -2,9 +2,9 @@
 // 1) Принимает push-уведомления (только по личной теме этого телефона), расшифровывает ссылку
 //    прямо на телефоне и показывает уведомление. Нажатие открывает ссылку.
 // 2) Позволяет установить страницу на главный экран и попасть в меню «Поделиться».
-importScripts("tb-crypto.js", "tb-core.js", "shared.js");
+importScripts("tb-crypto.js", "tb-core.js", "blobstore.js", "shared.js");
 
-const CACHE = "tab-bridge-v6";
+const CACHE = "tab-bridge-v7";
 const ICON = "icons/icon-192.png";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -16,8 +16,31 @@ self.addEventListener("activate", (e) => e.waitUntil((async () => {
 // Всегда свежая версия из сети, кэш — только запасной вариант без интернета.
 // Важно для приватности: параметры адреса (?url=…&text=… из «Поделиться» на Android)
 // НЕ уходят в сеть — страницу запрашиваем без них, а сама страница читает их локально.
+async function onShareTarget(request) {
+  try {
+    const fd = await request.formData();
+    const files = [];
+    let n = 0;
+    for (const f of fd.getAll("files")) {
+      if (!(f instanceof File) || !f.size || f.size > TBCrypto.MAX_FILE || n >= 10) continue;
+      const key = "share:" + Date.now() + ":" + n++;
+      await TBBlobs.put(key, f);
+      files.push({ key, name: f.name, type: f.type });
+    }
+    await KV.set("pendingShare", {
+      title: String(fd.get("title") || "").slice(0, 300), text: String(fd.get("text") || "").slice(0, 200000),
+      url: String(fd.get("url") || "").slice(0, 2400), files, ts: Date.now()
+    });
+  } catch {}
+  return Response.redirect(new URL("./?shared=1", self.registration.scope).href, 303);
+}
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
+  if (e.request.method === "POST" && url.origin === self.location.origin && url.pathname.endsWith("/share-target")) {
+    e.respondWith(onShareTarget(e.request));
+    return;
+  }
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
   const clean = url.origin + url.pathname;
   const netReq = url.search
@@ -67,6 +90,14 @@ async function onPush(event) {
   }
 
   for (const h of res.fresh) {
+    if (h.kind === "text" || h.kind === "file") {
+      const what = h.kind === "text" ? "✏️ Текст" : "🖼 Картинка";
+      await self.registration.showNotification(`${what}${h.from ? ` с «${h.from}»` : ""}`, {
+        body: h.status === "error" ? `Не скачано: ${h.error}` : (h.kind === "text" ? h.title : `${h.title} — нажмите, чтобы посмотреть`),
+        tag: "tb-" + h.id, icon: ICON, badge: ICON, data: { id: h.id, kind: h.kind }
+      });
+      continue;
+    }
     await self.registration.showNotification(h.title || hostOf(h.url), {
       body: [h.from ? `С «${h.from}»` : "", hostOf(h.url), "нажмите, чтобы открыть"].filter(Boolean).join(" · "),
       tag: "tb-" + h.id, icon: ICON, badge: ICON, data: { url: h.url, id: h.id }
@@ -98,9 +129,18 @@ async function onNotificationClick(d) {
   }
 }
 
+// Текст или картинка: открыть приложение и показать присланное
+async function openInApp(id) {
+  const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const c = list.find((x) => new URL(x.url).origin === self.location.origin);
+  if (c) { try { await c.focus(); } catch {} c.postMessage({ type: "tb-open", id }); }
+  else await self.clients.openWindow("./#o=" + encodeURIComponent(id));
+}
+
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const d = e.notification.data || {};
+  if (d.kind === "text" || d.kind === "file") { e.waitUntil(openInApp(String(d.id)).catch(() => {})); return; }
   if (!d.url || !TBCrypto.isSafeUrl(d.url)) return;
   e.waitUntil(onNotificationClick(d).catch(() => {}));
 });

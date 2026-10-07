@@ -2,7 +2,7 @@
 // Chrome/Edge/Яндекс: service worker (MV3). Firefox (ПК и Android): event page.
 // Логика устройств и сообщений — в tb-core.js (общая с телефоном), шифрование — в tb-crypto.js.
 
-if (typeof importScripts === "function" && !globalThis.TBCore) importScripts("config.js", "tb-crypto.js", "tb-core.js");
+if (typeof importScripts === "function" && !globalThis.TBCore) importScripts("config.js", "tb-crypto.js", "tb-core.js", "blobstore.js");
 
 const api = globalThis.browser ?? globalThis.chrome;
 const C = globalThis.TBCrypto;
@@ -14,7 +14,11 @@ const kv = {
   getAll: (keys) => api.storage.local.get(keys),
   setMany: (o) => api.storage.local.set(o)
 };
-const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER });
+const core = TBCore.create({ kv, kind: "pc", defaultServer: DEFAULT_SERVER, blobs: globalThis.TBBlobs });
+
+// Присланный текст или файл открываем на странице просмотра расширения
+const viewUrl = (id) => api.runtime.getURL("view.html#" + encodeURIComponent(id));
+const isLink = (h) => !h.kind || h.kind === "link";
 
 function guessDeviceName() {
   const ua = navigator.userAgent;
@@ -156,16 +160,20 @@ async function afterHandle(res) {
   for (const h of res.fresh) {
     if (s.autoOpen) {
       try {
-        const t = await openTab(h.url, !!s.focusOpened);
-        if (t) { tabIds[h.id] = t.id; core.markOpened(h.id); }
+        const t = isLink(h) ? await openTab(h.url, !!s.focusOpened)
+          : await api.tabs.create({ url: viewUrl(h.id), active: !!s.focusOpened });
+        if (t) { tabIds[h.id] = t.id; if (isLink(h)) core.markOpened(h.id); }
       } catch {}
     }
     if ((s.notify ?? true) && api.notifications) {
+      const from = h.from ? ` с «${h.from}»` : "";
+      const what = h.kind === "text" ? "Текст" : h.kind === "file" ? (/^image\//.test(h.file?.mime || "") ? "Картинка" : "Файл") : "Вкладка";
+      const tail = h.status === "error" ? ` — не скачан: ${h.error}` : (s.autoOpen ? "" : " — нажмите, чтобы открыть");
       try {
         await api.notifications.create("tb:" + h.id, {
           type: "basic", iconUrl: api.runtime.getURL("icons/icon128.png"),
-          title: (h.from ? `Вкладка с «${h.from}»` : "Новая вкладка") + (s.autoOpen ? "" : " — нажмите, чтобы открыть"),
-          message: h.title
+          title: what + from + tail,
+          message: h.kind === "text" ? (h.title || "") : h.title
         });
       } catch {}
     }
@@ -242,6 +250,13 @@ async function setupMenus() {
         api.contextMenus.create({ id: `tb-${ctx}|all`, parentId: parent, title: "Все устройства", contexts: [ctx] });
       }
     }
+    if (devices.length === 1) {
+      api.contextMenus.create({ id: `tb-text|${devices[0].id}`, title: `Отправить выделенный текст на «${devices[0].name}»`, contexts: ["selection"] });
+    } else if (devices.length > 1) {
+      api.contextMenus.create({ id: "tb-text|parent", title: "Отправить выделенный текст на…", contexts: ["selection"] });
+      for (const d of devices) api.contextMenus.create({ id: `tb-text|${d.id}`, parentId: "tb-text|parent", title: d.name, contexts: ["selection"] });
+      api.contextMenus.create({ id: "tb-text|all", parentId: "tb-text|parent", title: "Все устройства", contexts: ["selection"] });
+    }
   } catch {}
 }
 
@@ -250,6 +265,7 @@ api.contextMenus?.onClicked.addListener((info, tab) => {
   if (target === "none") return api.runtime.openOptionsPage();
   const to = target === "all" ? [] : [target];
   if (kind === "tb-link") sendWithFeedback(() => core.sendLink(info.linkUrl, info.linkText || info.selectionText || info.linkUrl, to));
+  else if (kind === "tb-text") sendWithFeedback(() => core.sendText(info.selectionText || "", to));
   else if (kind === "tb-page") sendWithFeedback(() => sendActive(to, tab));
 });
 
@@ -274,8 +290,8 @@ api.notifications?.onClicked.addListener(async (nid) => {
       return;
     } catch {}
   }
-  await openTab(h.url, true);
-  await core.markOpened(id);
+  if (isLink(h)) { await openTab(h.url, true); await core.markOpened(id); }
+  else await api.tabs.create({ url: viewUrl(id), active: true });
   updateBadge();
 });
 
@@ -292,11 +308,23 @@ async function handle(msg, sender) {
       return { ...i, tab: t ? { title: t.title, url: t.url } : null, ...s };
     }
     case "send": return sendActive(msg.to || []);
+    case "send-text": return { entry: await core.sendText(String(msg.text || ""), msg.to || []) };
+    case "send-file": {
+      // окно расширения передаёт файл как base64 (сообщения не умеют передавать Blob)
+      const bin = atob(String(msg.data || ""));
+      const bytes = new Uint8Array(bin.length);
+      for (let n = 0; n < bin.length; n++) bytes[n] = bin.charCodeAt(n);
+      return { entry: await core.sendFile(new Blob([bytes], { type: String(msg.mime || "") }), String(msg.name || "файл"), msg.to || []) };
+    }
+    case "retry-file": await core.fetchFile(String(msg.id)); return {};
+    case "mark-opened": await core.markOpened(String(msg.id)); updateBadge(); return {};
+    case "view": await api.tabs.create({ url: viewUrl(String(msg.id)), active: true }); return {};
     case "check": await connectLive(); await poll(); return {};
     case "open-received": {
       const { history } = await core.info();
       const h = history.find((x) => x.id === msg.id);
-      if (h) { await openTab(h.url, true); await core.markOpened(h.id); updateBadge(); }
+      if (h && isLink(h)) { await openTab(h.url, true); await core.markOpened(h.id); updateBadge(); }
+      else if (h) { await api.tabs.create({ url: viewUrl(h.id), active: true }); }
       return {};
     }
     case "mark-read": await core.markAllRead(); updateBadge(); return {};

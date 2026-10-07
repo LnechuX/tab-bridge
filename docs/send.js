@@ -39,7 +39,7 @@
   }
   function copyButton() {
     action("Скопировать ссылку", async (e) => {
-      try { await navigator.clipboard.writeText(req.url); e.target.textContent = "✓ Скопировано"; }
+      try { await navigator.clipboard.writeText(req.url || req.text); e.target.textContent = "✓ Скопировано"; }
       catch { e.target.textContent = "Не удалось скопировать"; }
     });
   }
@@ -48,9 +48,10 @@
   }
 
   if (req.url) $("link").textContent = (req.title ? req.title + " · " : "") + host(req.url);
+  else if (req.text) $("link").textContent = "✏️ " + req.text.replace(/\s+/g, " ").slice(0, 80);
 
   // ---------- нет ссылки ----------
-  if (!req.url) {
+  if (!req.url && !req.text) {
     view("info", "Это страница быстрой отправки",
       "Сюда открывается кнопка «📤 На ПК» и Быстрая команда. Сама по себе она ничего не делает.");
     action("Открыть Tab Bridge", () => { location.href = "./"; }, true);
@@ -61,7 +62,7 @@
   const paired = Boolean(await KV.get("secret", "")) && Boolean(await KV.get("deviceId", ""));
   if (!paired) {
     // запомним ссылку — она уйдёт сама сразу после подключения
-    await KV.set("pendingSend", { u: req.url, t: req.title, ts: Date.now() });
+    await KV.set("pendingSend", { u: req.url, x: req.text, t: req.title, ts: Date.now() });
     view("info", "Этот браузер ещё не подключён",
       TB.IS_IOS
         ? "Наведите камеру iPhone на QR-код в настройках Tab Bridge на компьютере и откройте ссылку в Safari — " +
@@ -79,7 +80,7 @@
     busy = true;
     view("busy", "Отправляю…");
     try {
-      const e = await core.sendLink(req.url, req.title, ids);
+      const e = req.url ? await core.sendLink(req.url, req.title, ids) : await core.sendText(req.text, ids);
       if ($("remember").checked) await KV.set("quickTarget", ids.length ? ids[0] : "all");
       const names = e.to.filter((t) => t.s !== "failed").map((t) => `«${t.name}»`).join(", ");
       view("ok", "Отправлено", "на " + names);
