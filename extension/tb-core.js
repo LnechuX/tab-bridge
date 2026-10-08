@@ -42,7 +42,8 @@
   // Большой зашифрованный файл уходит частями, получатель собирает их обратно.
   const PART = 1900000;
   const MAX_PARTS = 8;
-  const RES_CAP = PART + 1024;    // больше одной части с сервера не скачиваем (защита от «бесконечного» ответа)
+  const RES_CAP = PART + 1024;
+  const T_SEND = 15000, T_POLL = 20000, T_PART = 90000;   // сколько ждём ответа сервера, мс    // больше одной части с сервера не скачиваем (защита от «бесконечного» ответа)
 
   // maxBytes — сколько места на этом устройстве могут занимать полученные файлы
   function create({ kv, kind, defaultServer = "https://ntfy.sh", blobs = null, maxBytes = 300 * 1024 * 1024, version = "" }) {
@@ -87,12 +88,33 @@
       return { group, control: group.topic, inbox: await C.topicFor(group, "inbox:" + s.deviceId) };
     }
 
+    // Любой запрос к серверу — с ограничением по времени (вместе с чтением ответа).
+    // Без него при «замедлении» связи провайдером запрос мог висеть бесконечно, а на экране — «Отправляю…».
+    async function timed(ms, fn) {
+      const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ac ? setTimeout(() => ac.abort(), ms) : null;
+      try { return await fn(ac ? ac.signal : undefined); }
+      catch (e) { throw (e && e.name === "AbortError") ? timeoutError(ms) : e; }
+      finally { if (timer) clearTimeout(timer); }
+    }
+    function timeoutError(ms) {
+      const e = new Error(`Сервер не ответил за ${Math.round(ms / 1000)} с. Связь с сервером очень медленная или обрывается — ` +
+        "откройте «Проверка связи» в настройках Tab Bridge.");
+      e.name = "TimeoutError";
+      return e;
+    }
+    const httpError = (r) => new Error(r.status === 429
+      ? "Сервер временно ограничил это интернет-подключение (слишком много запросов). Подождите несколько минут."
+      : `Сервер ответил ошибкой ${r.status}`);
+
     async function publish(s, topic, message) {
-      const r = await fetch(serverOf(s), {
-        ...FO, method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, message })
+      await timed(T_SEND, async (signal) => {
+        const r = await fetch(serverOf(s), {
+          ...FO, signal, method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic, message })
+        });
+        if (!r.ok) throw httpError(r);
       });
-      if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
     }
 
     async function control(s, obj) {
@@ -276,13 +298,17 @@
     // Загрузка на сервер. Если нужен процент выполнения и есть XMLHttpRequest (страница) — через него.
     function upload(url, data, onProgress) {
       if (!onProgress || typeof XMLHttpRequest === "undefined") {
-        return fetch(url, { ...FO, method: "PUT", headers: { "X-Filename": "tb.bin" }, body: data });
+        return timed(T_PART, async (signal) => {
+          const r = await fetch(url, { ...FO, signal, method: "PUT", headers: { "X-Filename": "tb.bin" }, body: data });
+          const j = await r.json().catch(() => ({}));
+          return { ok: r.ok, status: r.status, json: async () => j };
+        });
       }
       return new Promise((resolve, reject) => {
         const x = new XMLHttpRequest();
         x.open("PUT", url);
         x.setRequestHeader("X-Filename", "tb.bin");
-        x.timeout = 180000;
+        x.timeout = T_PART;
         x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
         x.onload = () => resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, json: async () => JSON.parse(x.responseText || "{}") });
         x.onerror = () => reject(new TypeError("Failed to fetch"));
@@ -354,10 +380,13 @@
         if (!isOurFile(s, h.file.url)) throw new Error("Неверный адрес файла.");
         const parts = [];
         for (const u of [].concat(h.file.url)) {
-          let r;
-          try { r = await fetch(u, FO); } catch (e) { throw netError(e); }
-          if (!r.ok) throw new Error(r.status === 404 ? "Файл устарел: сервер хранит файлы 3 часа." : `Не удалось скачать (ошибка ${r.status}).`);
-          parts.push(await readCapped(r, RES_CAP));
+          try {
+            parts.push(await timed(T_PART, async (signal) => {
+              const r = await fetch(u, { ...FO, signal });
+              if (!r.ok) throw new Error(r.status === 404 ? "Файл устарел: сервер хранит файлы 3 часа." : `Не удалось скачать (ошибка ${r.status}).`);
+              return readCapped(r, RES_CAP);
+            }));
+          } catch (e) { throw netError(e); }
         }
         const all = parts.length === 1 ? parts[0] : new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
         if (parts.length > 1) { let o = 0; for (const p of parts) { all.set(p, o); o += p.length; } }
@@ -550,9 +579,12 @@
       if (!s.secret || !s.deviceId) return EMPTY;
       const t = await topicsOf(s);
       const since = s.sinceTs ? String(Math.max(0, s.sinceTs - 1)) : "all";
-      const r = await fetch(`${serverOf(s)}/${t.control},${t.inbox}/json?poll=1&since=${since}`, FO);
-      if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
-      const msgs = new TextDecoder().decode(await readCapped(r, 16 * 1024 * 1024)).split("\n").filter(Boolean)
+      const body = await timed(T_POLL, async (signal) => {
+        const r = await fetch(`${serverOf(s)}/${t.control},${t.inbox}/json?poll=1&since=${since}`, { ...FO, signal });
+        if (!r.ok) throw httpError(r);
+        return readCapped(r, 16 * 1024 * 1024);
+      });
+      const msgs = new TextDecoder().decode(body).split("\n").filter(Boolean)
         .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       const res = await handle(msgs, { advance: true });
       flushPending().catch(() => {});
@@ -566,14 +598,71 @@
       return `${serverOf(s).replace(/^http/i, "ws")}/${t.control},${t.inbox}/ws`;
     }
 
+    // «Проверка связи»: что именно не так между этим устройством и сервером.
+    // Шлёт несколько служебных сообщений в случайную временную тему (не в вашу группу, без ваших данных).
+    // onStep(список шагов) вызывается после каждого шага. Возвращает { steps, verdict, ok }.
+    async function diagnose(onStep, server) {
+      const srv = cleanUrl(server) || serverOf(await load());
+      const topic = "tbcheck" + randId(20);
+      const steps = [];
+      const step = async (name, ms, fn) => {
+        const st = { name, ok: false, ms: 0, note: "" };
+        steps.push(st);
+        const t0 = Date.now();
+        try { st.note = (await timed(ms, fn)) || ""; st.ok = true; }
+        catch (e) { st.note = e && e.name === "TimeoutError" ? `нет ответа за ${Math.round(ms / 1000)} с` : e && e.name === "TypeError" ? "нет соединения" : String(e?.message || e); }
+        st.ms = Date.now() - t0;
+        if (onStep) try { onStep(steps.slice()); } catch {}
+        return st.ok;
+      };
+      const pub = (signal, message) => fetch(srv, { ...FO, signal, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic, message }) })
+        .then((r) => { if (!r.ok) throw httpError(r); });
+      const readTopic = async (signal) => {
+        const r = await fetch(`${srv}/${topic}/json?poll=1&since=all`, { ...FO, signal });
+        if (!r.ok) throw httpError(r);
+        return readCapped(r, 4 * 1024 * 1024);
+      };
+
+      const okHealth = await step("Сервер отвечает", 10000, async (signal) => {
+        const r = await fetch(`${srv}/v1/health`, { ...FO, signal });
+        if (!r.ok) throw httpError(r);
+        await r.text();
+      });
+      const okSend = okHealth && await step("Отправка сообщения", T_SEND, (signal) => pub(signal, "check"));
+      const okRecv = okSend && await step("Получение сообщения", T_POLL, async (signal) => {
+        const b = new TextDecoder().decode(await readTopic(signal));
+        if (!b.includes('"check"')) throw new Error("сообщение не вернулось");
+      });
+      // Провайдеры, «замедляющие» зарубежные хостинги, пропускают только первые ~16 КБ — проверим ответ побольше
+      const okBig = okRecv && await step("Большой ответ (около 24 КБ)", 25000, async (signal) => {
+        for (let n = 0; n < 6; n++) await pub(signal, "x".repeat(3900));
+        const b = await readTopic(signal);
+        if (b.length < 23000) throw new Error("ответ пришёл не полностью");
+        return Math.round(b.length / 1024) + " КБ";
+      });
+
+      const slow = steps.some((x) => x.ok && x.ms > 3000);
+      let verdict;
+      if (!okHealth) verdict = "Сервер " + srv.replace(/^https:\/\//, "") + " недоступен с этого интернет-подключения. Если другие сайты открываются — сервер, скорее всего, заблокирован или замедлен вашим провайдером.";
+      else if (steps.some((x) => /ограничил/.test(x.note))) verdict = "Сервер временно ограничил это интернет-подключение (слишком много запросов). Подождите 10–15 минут.";
+      else if (!okSend || !okRecv) verdict = "Сервер отвечает, но сообщения не проходят. Попробуйте позже или другое подключение (Wi-Fi / мобильный интернет).";
+      else if (!okBig) verdict = "Маленькие сообщения проходят, а данные побольше обрываются. Так провайдеры в России сейчас «замедляют» многие зарубежные серверы. Ссылки могут доходить, картинки и история — нет. Надёжное решение — свой сервер в России.";
+      else if (slow) verdict = "Связь есть, но медленная. Отправка будет занимать несколько секунд.";
+      else verdict = "Связь с сервером в порядке.";
+      return { steps, verdict, ok: Boolean(okBig && !slow), server: srv };
+    }
+
     // Узнать, какие устройства уже есть в группе с этим ключом, НЕ подключаясь к ней
     // (чтобы перед подключением по чужой ссылке показать: «вы подключаетесь к …»).
     async function peek(secret, server) {
       const srv = cleanUrl(server) || defaultServer;
       const group = await C.deriveGroup(C.normalizeSecret(secret));
-      const r = await fetch(`${srv}/${group.topic}/json?poll=1&since=all`, FO);
-      if (!r.ok) throw new Error(`Сервер ответил ошибкой ${r.status}`);
-      const msgs = new TextDecoder().decode(await readCapped(r, 16 * 1024 * 1024)).split("\n")
+      const body = await timed(T_POLL, async (signal) => {
+        const r = await fetch(`${srv}/${group.topic}/json?poll=1&since=all`, { ...FO, signal });
+        if (!r.ok) throw httpError(r);
+        return readCapped(r, 16 * 1024 * 1024);
+      });
+      const msgs = new TextDecoder().decode(body).split("\n")
         .map((l) => { try { return JSON.parse(l); } catch { return null; } })
         .filter((m) => m && m.event === "message" && typeof m.message === "string")
         .sort((a, b) => a.time - b.time);
@@ -712,7 +801,7 @@
     }
 
     return {
-      pair, peek, hello, maybeHello, rename, removeDevice, leave,
+      pair, peek, diagnose, hello, maybeHello, rename, removeDevice, leave,
       sendLink, sendText, sendFile, fetchFile, getFile, getText, resend, markOpened,
       cleanup, maybeCleanup, setKeepDays, storageStats, deleteFiles, markAllRead, unreadCount, handle, poll, wsUrl, inboxTopic, info, clearHistory, serial
     };

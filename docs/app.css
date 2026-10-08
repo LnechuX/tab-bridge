@@ -273,3 +273,11 @@ li.recv a.recv-row .grow { flex: 1; min-width: 0; }
 .legal ul { list-style: disc; margin: 0 0 10px; }
 .legal li { display: list-item; border: 0; padding: 0; background: none; }
 .legal li a { display: inline; padding: 0; border: 0; color: var(--accent, #2563eb); }
+
+/* Проверка связи */
+.net-steps { margin: 10px 0 0; }
+.net-steps li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.net-steps li:last-child { border-bottom: 0; }
+.net-steps .ok { color: var(--ok, #16a34a); }
+.net-steps .bad { color: var(--err); }
+#netVerdict { margin-top: 10px; }

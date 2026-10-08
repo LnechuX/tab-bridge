@@ -314,6 +314,15 @@
     </div>
 
     <div class="card">
+      <h2>Проверка связи</h2>
+      <p class="muted">Если отправка идёт долго или «зависает» — проверьте, как этот телефон достаёт до сервера. Займёт до минуты; ваши данные не отправляются.</p>
+      <button id="netCheck" class="wide">Проверить связь</button>
+      <ul class="net-steps" id="netSteps"></ul>
+      <p class="mem" id="netVerdict" hidden></p>
+      <button id="netCopy" class="wide mt6" hidden>Скопировать результат</button>
+    </div>
+
+    <div class="card">
       <h2>Память</h2>
       <p class="muted">Присланные картинки хранятся <b>внутри Tab Bridge</b>, а не в «Фото». Чтобы картинка попала в «Фото», откройте её и нажмите «Сохранить». На сервере всё зашифровано и удаляется само: файлы через 3 часа, сообщения через 12 часов.</p>
       <div class="mem" id="memStats">Считаю…</div>

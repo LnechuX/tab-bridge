@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Bridge — вкладки между ПК и телефоном",
   "short_name": "Tab Bridge",
-  "version": "3.6.0",
+  "version": "3.6.1",
   "description": "Отправляйте вкладки, текст и скриншоты между компьютером и телефоном. Без регистрации, со сквозным шифрованием.",
   "permissions": [
     "storage",

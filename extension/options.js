@@ -259,3 +259,31 @@ api.storage.onChanged.addListener((ch) => { if (ch.devices) renderDevices(); });
   $("termsLink").href = base + "terms.html";
   $("extVersion").textContent = api.runtime.getManifest().version;
 }
+
+// ---------- проверка связи ----------
+{
+  let report = "";
+  $("netCheck").addEventListener("click", async () => {
+    $("netCheck").disabled = true; $("netCheck").textContent = "Проверяю… (до минуты)";
+    $("netVerdict").hidden = true; $("netCopy").hidden = true; $("netSteps").textContent = "";
+    const r = await call({ type: "diagnose" });
+    $("netCheck").disabled = false; $("netCheck").textContent = "Проверить ещё раз";
+    if (!r.ok) { $("netVerdict").textContent = "Не удалось проверить: " + (r.error || ""); $("netVerdict").hidden = false; return; }
+    const res = r.result;
+    for (const st of res.steps) {
+      const d = document.createElement("div");
+      d.className = "muted";
+      d.textContent = `${st.ok ? "✓" : "✕"} ${st.name} — ${(st.ms / 1000).toFixed(1)} с${st.note ? " · " + st.note : ""}`;
+      d.style.color = st.ok ? "" : "var(--err)";
+      $("netSteps").append(d);
+    }
+    $("netVerdict").textContent = (res.ok ? "✓ " : "⚠️ ") + res.verdict;
+    $("netVerdict").hidden = false;
+    report = [`Tab Bridge ${api.runtime.getManifest().version}, компьютер, ${new Date().toLocaleString()}`, `Сервер: ${res.server}`,
+      ...res.steps.map((x) => `${x.ok ? "OK" : "FAIL"} ${x.name}: ${(x.ms / 1000).toFixed(1)} с ${x.note}`), res.verdict].join("\n");
+    $("netCopy").hidden = false;
+  });
+  $("netCopy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(report); $("netCopy").textContent = "✓ Скопировано"; } catch {}
+  });
+}

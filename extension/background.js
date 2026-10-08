@@ -206,6 +206,7 @@ let wsKey = "";
 // Поэтому раз в 20 с сами шлём короткий сигнал (сервер такие сообщения просто выбрасывает):
 // это держит фон бодрым, и вкладки, текст и картинки приходят сразу.
 const WS_PING_MS = 20000;
+const WS_MAX_BYTES = 10000, WS_MAX_AGE = 10 * 60 * 1000;
 let wsPing = null;
 let wsRetry = null;
 async function connectLive() {
@@ -219,15 +220,30 @@ async function connectLive() {
     const sock = new WebSocket(url);
     ws = sock;
     wsKey = url;
+    // Некоторые провайдеры «замедляют» зарубежные серверы: после ~16 КБ данных соединение молча замирает.
+    // Поэтому соединение регулярно открываем заново — до этого предела и не реже раза в 10 минут.
+    let got = 0;
+    const born = Date.now();
+    const recycle = () => {
+      if (ws !== sock) return;
+      ws = null; clearInterval(wsPing); wsPing = null;
+      try { sock.close(); } catch {}
+      connectLive().catch(() => {});
+    };
     sock.onopen = () => {
       clearInterval(wsPing);
-      wsPing = setInterval(() => { if (sock.readyState === 1) { try { sock.send("ping"); } catch {} } }, WS_PING_MS);
+      wsPing = setInterval(() => {
+        if (Date.now() - born > WS_MAX_AGE) return recycle();
+        if (sock.readyState === 1) { try { sock.send("ping"); } catch {} }
+      }, WS_PING_MS);
       poll().catch(() => {});                 // забрать то, что пришло, пока соединения не было
     };
     sock.onmessage = (e) => {
+      got += String(e.data || "").length;
       let m;
       try { m = JSON.parse(e.data); } catch { return; }
       if (m.event === "message") core.handle([m]).then(afterHandle).catch(() => {});
+      if (got > WS_MAX_BYTES) recycle();
     };
     sock.onclose = sock.onerror = () => {
       if (ws !== sock) return;
@@ -378,6 +394,7 @@ async function handle(msg, sender) {
       return {};
     }
     case "settings-changed": reconnect(); return {};
+    case "diagnose": return { result: await core.diagnose(null) };
     default: return {};
   }
 }

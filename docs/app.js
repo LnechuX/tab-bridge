@@ -977,6 +977,42 @@
     setMsg($("settingsMsg"), "Сохранено ✓ — новое имя увидят ваши устройства", "ok");
   });
   $("appVersion").textContent = "Tab Bridge " + TB.VERSION;
+
+  // ---------- проверка связи ----------
+  let netReport = "";
+  function renderNet(steps) {
+    const box = $("netSteps");
+    box.textContent = "";
+    for (const st of steps) {
+      const li = el("li");
+      li.append(el("span", "", st.name), el("span", st.ok ? "ok" : "bad",
+        (st.ok ? "✓ " : "✕ ") + (st.ms / 1000).toFixed(1) + " с" + (st.note ? " · " + st.note : "")));
+      box.append(li);
+    }
+  }
+  $("netCheck").addEventListener("click", async () => {
+    $("netCheck").disabled = true;
+    $("netVerdict").hidden = true; $("netCopy").hidden = true;
+    $("netCheck").textContent = "Проверяю…";
+    renderNet([]);
+    try {
+      const r = await core.diagnose(renderNet);
+      renderNet(r.steps);
+      $("netVerdict").textContent = (r.ok ? "✓ " : "⚠️ ") + r.verdict;
+      $("netVerdict").hidden = false;
+      netReport = [`Tab Bridge ${TB.VERSION}, телефон, ${new Date().toLocaleString()}`, `Сервер: ${r.server}`,
+        ...r.steps.map((x) => `${x.ok ? "OK" : "FAIL"} ${x.name}: ${(x.ms / 1000).toFixed(1)} с ${x.note}`), r.verdict].join("\n");
+      $("netCopy").hidden = false;
+    } catch (e) {
+      $("netVerdict").textContent = "Не удалось проверить: " + String(e?.message || e);
+      $("netVerdict").hidden = false;
+    } finally {
+      $("netCheck").disabled = false; $("netCheck").textContent = "Проверить ещё раз";
+    }
+  });
+  $("netCopy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(netReport); $("netCopy").textContent = "✓ Скопировано"; } catch {}
+  });
   $("forget").addEventListener("click", async () => {
     if (!confirm("Отключить этот телефон? Он исчезнет из списка на остальных устройствах.")) return;
     await TB.wipe(await swReady, true);
@@ -1126,11 +1162,27 @@
       const sock = new WebSocket(url);
       ws = sock;
       let ping = null;
-      sock.onopen = () => { ping = setInterval(() => { if (sock.readyState === 1) try { sock.send("ping"); } catch {} }, 20000); };
+      // соединение регулярно открываем заново: у «замедляющих» провайдеров оно замирает после ~16 КБ
+      let got = 0;
+      const born = Date.now();
+      const recycle = () => {
+        if (ws !== sock) return;
+        ws = null; clearInterval(ping);
+        try { sock.close(); } catch {}
+        poll(); connectWs();
+      };
+      sock.onopen = () => {
+        ping = setInterval(() => {
+          if (Date.now() - born > 10 * 60 * 1000) return recycle();
+          if (sock.readyState === 1) try { sock.send("ping"); } catch {}
+        }, 20000);
+      };
       sock.onmessage = async (e) => {
+        got += String(e.data || "").length;
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
         if (m.event === "message") onResult(await core.handle([m]));
+        if (got > 10000) recycle();
       };
       sock.onclose = sock.onerror = () => {
         clearInterval(ping);
